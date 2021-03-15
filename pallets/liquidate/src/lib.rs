@@ -133,119 +133,118 @@ impl<T: Config> Module<T> {
             LOCK_BLOCK_EXPIRATION,
             rt_offchain::Duration::from_millis(LOCK_TIMEOUT_EXPIRATION),
         );
-		if let Err(_guard) = lock.try_lock() {
-			debug::error!("offchain_worker error: get lock failed");
-			return;
-		}
-		// 1 get all borrowers
-		let mut borrowers:Vec<T::AccountId> = vec![];
-		for currency_id in pallet_loans::Currencies::<T>::get().iter() {
-			let mut v = pallet_loans::AccountBorrows::<T>::iter_prefix(currency_id)
-				.map(|(x,_)| x)
-				.filter(|x| !borrowers.contains(x))
-				.collect::<Vec<T::AccountId>>();
-			borrowers.append(&mut v);
-		}
-		debug::info!("all borrowers are: {:?}", borrowers);
-
-		// we execute liquidation with borrowers one by one
-		for borrower in borrowers.into_iter() {
-			// 2.1 get debts by currency
-			let mut classify_debts:Vec<DebtAccountBook> = vec![];
-			// 2.2 get collaterals by currency
-			let mut classify_collaterals:Vec<CollateralsAccountBook> = vec![];
-
+		if let Ok(_guard) = lock.try_lock() {
+			// 1 get all borrowers
+			let mut borrowers:Vec<T::AccountId> = vec![];
 			for currency_id in pallet_loans::Currencies::<T>::get().iter() {
-				let (currency_price, _) = 
-					match pallet_ocw_oracle::Prices::get(currency_id)
-						.ok_or(Error::<T>::OracleCurrencyPriceNotReady){
-							Ok(v) => v,
-							Err(_e) => continue
-					};
+				let mut v = pallet_loans::AccountBorrows::<T>::iter_prefix(currency_id)
+					.map(|(x,_)| x)
+					.filter(|x| !borrowers.contains(x))
+					.collect::<Vec<T::AccountId>>();
+				borrowers.append(&mut v);
+			}
+			debug::info!("all borrowers are: {:?}", borrowers);
 
-				///////////// 2.1.1 insert debt by currency
-				let borrow_currency_amount =
-					match pallet_loans::Pallet::<T>::borrow_balance_stored(&borrower, currency_id){
-						Ok(v) => v,
-						Err(_e) => continue
-					};
-				let borrow_currency_sum_price = 
-					match borrow_currency_amount
-						.checked_mul(currency_price)
-						.ok_or(Error::<T>::CaculateError){
+			// we execute liquidation with borrowers one by one
+			for borrower in borrowers.into_iter() {
+				// 2.1 get debts by currency
+				let mut classify_debts:Vec<DebtAccountBook> = vec![];
+				// 2.2 get collaterals by currency
+				let mut classify_collaterals:Vec<CollateralsAccountBook> = vec![];
+
+				for currency_id in pallet_loans::Currencies::<T>::get().iter() {
+					let (currency_price, _) = 
+						match pallet_ocw_oracle::Prices::get(currency_id)
+							.ok_or(Error::<T>::OracleCurrencyPriceNotReady){
+								Ok(v) => v,
+								Err(_e) => continue
+						};
+
+					///////////// 2.1.1 insert debt by currency
+					let borrow_currency_amount =
+						match pallet_loans::Pallet::<T>::borrow_balance_stored(&borrower, currency_id){
 							Ok(v) => v,
 							Err(_e) => continue
 						};
-				classify_debts.push((*currency_id,borrow_currency_amount,currency_price,borrow_currency_sum_price));
-
-				// this is why we need distinguish token and cToken, though we have not yet!
-				// error-prone
-				/////////////2.2.1 insert collateral by currency
-				let collateral_ctoken_amount = pallet_loans::AccountCollateral::<T>::get(currency_id, &borrower);
-				let exchange_rate = pallet_loans::ExchangeRate::<T>::get(currency_id);
-				//the total amount of borrower's collateral token
-				let collateral_currency_amount = 
-					match collateral_ctoken_amount.checked_mul(exchange_rate)
-							.and_then(|r| r.checked_div(RATE_DECIMAL))
+					let borrow_currency_sum_price = 
+						match borrow_currency_amount
+							.checked_mul(currency_price)
 							.ok_or(Error::<T>::CaculateError){
 								Ok(v) => v,
 								Err(_e) => continue
-					};
-				//the total price of borrower's collateral token
-				let collateral_currency_sum_price = 
-					match collateral_currency_amount.checked_mul(currency_price).ok_or(Error::<T>::CaculateError) {
-						Ok(v) => v,
-						Err(_e) => continue
-					};
-					
-				let liquidation_threshold = pallet_loans::LiquidationThreshold::<T>::get(currency_id);
-				classify_collaterals.push((*currency_id,collateral_currency_amount,currency_price,collateral_currency_sum_price,liquidation_threshold));
-			}
+							};
+					classify_debts.push((*currency_id,borrow_currency_amount,currency_price,borrow_currency_sum_price));
 
-			// 3 check liquidation threshold
-			// if (collateral_total_value * liquidation_threshold)/(debt_total_value) < 1 ,execute liquidation
-			let collateral_liquidation_threshold_value = classify_collaterals.iter()
-				.fold(0 as Balance,
-					|acc,&(_,_,_,total_sum_price,liquidation_threshold)| 
-					acc + total_sum_price * liquidation_threshold
-				);// FIXME liquidation_threshold is "8 * RATE_DECIMAL / 10"
-			
-			let debt_total_value = classify_debts.iter()
-				.fold(0 as Balance, 
-					|acc, &(_,_,_,total_sum_price)| 
-					acc + total_sum_price
-				);
-			
-			// 4 no need liquidate
-			if collateral_liquidation_threshold_value / (debt_total_value * RATE_DECIMAL) > 1 {
-				continue;
-			}
-
-			// 5 liquidation strategy:
-			// since total debt doesn't depend on single currency, it depends on all currencies' total value
-			// we will liquidate as following:
-			// Suppose borrower has three collateral（BTC\KSM\DOT），and thier sum-price ratio is(5:3:2)
-			// then we divide this borrower's debt in this ratio(5:3:2),liquidate each collateral respectively.
-			// !!! what's important 
-			//////////////////////////////////
-			// the liquidation pool must have enough assets
-			let mut waiting_for_liquidation_vec: Vec<WaitingForLiquidation<T::AccountId>> = vec![];
-
-			let collateral_total_value = classify_collaterals.iter()
-				.fold(0 as Balance,
-					|acc,&(_,_,_,total_sum_price,_)| 
-					acc + total_sum_price 
-				);
-			for &(liquidate_token,debt_repay_amount,_,_debt_total_sum_price) in classify_debts.iter() {
-				//CollateralsAccountBook = (CurrencyId, Balance, Price, TotalSumPirce, LiquidationThreshold);
-				for &(collateral_token,_,_,single_collateral_total_sum_pirce,_) in classify_collaterals.iter(){
-					let repay_amount = debt_repay_amount * single_collateral_total_sum_pirce / collateral_total_value;
-					waiting_for_liquidation_vec.push(WaitingForLiquidation(borrower.clone(),liquidate_token,collateral_token,repay_amount));
+					// this is why we need distinguish token and cToken, though we have not yet!
+					// error-prone
+					/////////////2.2.1 insert collateral by currency
+					let collateral_ctoken_amount = pallet_loans::AccountCollateral::<T>::get(currency_id, &borrower);
+					let exchange_rate = pallet_loans::ExchangeRate::<T>::get(currency_id);
+					//the total amount of borrower's collateral token
+					let collateral_currency_amount = 
+						match collateral_ctoken_amount.checked_mul(exchange_rate)
+								.and_then(|r| r.checked_div(RATE_DECIMAL))
+								.ok_or(Error::<T>::CaculateError){
+									Ok(v) => v,
+									Err(_e) => continue
+						};
+					//the total price of borrower's collateral token
+					let collateral_currency_sum_price = 
+						match collateral_currency_amount.checked_mul(currency_price).ok_or(Error::<T>::CaculateError) {
+							Ok(v) => v,
+							Err(_e) => continue
+						};
+						
+					let liquidation_threshold = pallet_loans::LiquidationThreshold::<T>::get(currency_id);
+					classify_collaterals.push((*currency_id,collateral_currency_amount,currency_price,collateral_currency_sum_price,liquidation_threshold));
 				}
+
+				// 3 check liquidation threshold
+				// if (collateral_total_value * liquidation_threshold)/(debt_total_value) < 1 ,execute liquidation
+				let collateral_liquidation_threshold_value = classify_collaterals.iter()
+					.fold(0 as Balance,
+						|acc,&(_,_,_,total_sum_price,liquidation_threshold)| 
+						acc + total_sum_price * liquidation_threshold
+					);// FIXME liquidation_threshold is "8 * RATE_DECIMAL / 10"
+				
+				let debt_total_value = classify_debts.iter()
+					.fold(0 as Balance, 
+						|acc, &(_,_,_,total_sum_price)| 
+						acc + total_sum_price
+					);
+				
+				// 4 no need liquidate
+				if collateral_liquidation_threshold_value / (debt_total_value * RATE_DECIMAL) > 1 {
+					continue;
+				}
+
+				// 5 liquidation strategy:
+				// since total debt doesn't depend on single currency, it depends on all currencies' total value
+				// we will liquidate as following:
+				// Suppose borrower has three collateral（BTC\KSM\DOT），and thier sum-price ratio is(5:3:2)
+				// then we divide this borrower's debt in this ratio(5:3:2),liquidate each collateral respectively.
+				// !!! what's important 
+				//////////////////////////////////
+				// the liquidation pool must have enough assets
+				let mut waiting_for_liquidation_vec: Vec<WaitingForLiquidation<T::AccountId>> = vec![];
+
+				let collateral_total_value = classify_collaterals.iter()
+					.fold(0 as Balance,
+						|acc,&(_,_,_,total_sum_price,_)| 
+						acc + total_sum_price 
+					);
+				for &(liquidate_token,debt_repay_amount,_,_debt_total_sum_price) in classify_debts.iter() {
+					//CollateralsAccountBook = (CurrencyId, Balance, Price, TotalSumPirce, LiquidationThreshold);
+					for &(collateral_token,_,_,single_collateral_total_sum_pirce,_) in classify_collaterals.iter(){
+						let repay_amount = debt_repay_amount * single_collateral_total_sum_pirce / collateral_total_value;
+						waiting_for_liquidation_vec.push(WaitingForLiquidation(borrower.clone(),liquidate_token,collateral_token,repay_amount));
+					}
+				}
+				//liquidate a single user every time
+				Self::offchain_signed_tx(borrower.clone(), waiting_for_liquidation_vec);
 			}
-			//liquidate a single user every time
-			Self::offchain_signed_tx(borrower.clone(), waiting_for_liquidation_vec);
 		}
+		debug::error!("offchain_worker error: get lock failed");
 	}
 
 	// Sign the query result
