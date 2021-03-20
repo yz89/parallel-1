@@ -3905,15 +3905,16 @@ dependencies = [
 name = "pallet-liquidate"
 version = "3.0.0"
 dependencies = [
- "alt_serde",
  "alt_serde_json",
  "frame-support",
  "frame-system",
+ "orml-traits",
  "pallet-loans",
  "pallet-ocw-oracle",
  "parallel-primitives",
  "parity-scale-codec",
  "parking_lot 0.10.2",
+ "serde",
  "sp-core",
  "sp-io",
  "sp-keystore",

@@ -1,6 +1,6 @@
 use parallel_runtime::{
-    AccountId, AuraConfig, BalancesConfig, GenesisConfig, GrandpaConfig, LoansConfig, Signature,
-    StakingConfig, SudoConfig, SystemConfig, TokensConfig, WASM_BINARY,
+    AccountId, AuraConfig, BalancesConfig, GenesisConfig, GrandpaConfig, LiquidateConfig,
+    LoansConfig, Signature, StakingConfig, SudoConfig, SystemConfig, TokensConfig, WASM_BINARY,
 };
 use primitives::{CurrencyId, RATE_DECIMAL, TOKEN_DECIMAL};
 use sc_service::ChainType;
@@ -232,5 +232,35 @@ fn testnet_genesis(
             ],
         }),
         pallet_staking: Some(StakingConfig {}),
+        //must be pool's account
+        pallet_liquidate: Some(LiquidateConfig {
+            pool_accounts: vec![
+                (
+                    endowed_accounts[4].clone(),
+                    CurrencyId::DOT,
+                    1_000_000 * TOKEN_DECIMAL,
+                ),
+                (
+                    endowed_accounts[4].clone(),
+                    CurrencyId::KSM,
+                    1_000_000 * TOKEN_DECIMAL,
+                ),
+                (
+                    endowed_accounts[4].clone(),
+                    CurrencyId::BTC,
+                    1_000_0000 * TOKEN_DECIMAL,
+                ),
+                (
+                    endowed_accounts[4].clone(),
+                    CurrencyId::USDC,
+                    1_000_000 * TOKEN_DECIMAL,
+                ),
+                (
+                    endowed_accounts[4].clone(),
+                    CurrencyId::xDOT,
+                    1_000_000 * TOKEN_DECIMAL,
+                ),
+            ],
+        }),
     }
 }

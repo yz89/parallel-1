@@ -419,7 +419,7 @@ construct_runtime!(
         Loans: pallet_loans::{Module, Call, Storage, Event<T>, Config},
         Staking: pallet_staking::{Module, Call, Storage, Event<T>, Config},
         OcwOracle: pallet_ocw_oracle::{Module, Call, Storage, Event<T>, ValidateUnsigned},
-        Liquidate: pallet_liquidate::{Module, Call, Event<T>},
+        Liquidate: pallet_liquidate::{Module, Call, Event<T>, Config<T>},
     }
 );
 

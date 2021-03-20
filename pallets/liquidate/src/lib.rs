@@ -8,6 +8,7 @@ use frame_system::{
     pallet_prelude::*,
 };
 pub use module::*;
+use orml_traits::MultiCurrencyExtended;
 use pallet_loans;
 use pallet_ocw_oracle;
 use primitives::*;
@@ -18,7 +19,8 @@ use sp_runtime::{
     RuntimeDebug,
 };
 use sp_std::prelude::*;
-
+#[cfg(feature = "std")]
+use std::convert::TryInto;
 pub const KEY_TYPE: KeyTypeId = KeyTypeId(*b"pool");
 pub const LOCK_TIMEOUT_EXPIRATION: u64 = 20000; // in milli-seconds
 pub const LOCK_BLOCK_EXPIRATION: u32 = 10; // in block number
@@ -113,6 +115,38 @@ pub mod module {
     pub enum Error<T> {
         CaculateError,
         OracleCurrencyPriceNotReady,
+    }
+
+    #[pallet::genesis_config]
+    pub struct GenesisConfig<T: Config> {
+        pub pool_accounts: Vec<(T::AccountId, CurrencyId, Balance)>,
+    }
+
+    #[cfg(feature = "std")]
+    impl<T: Config> Default for GenesisConfig<T> {
+        fn default() -> Self {
+            GenesisConfig {
+                pool_accounts: vec![],
+            }
+        }
+    }
+
+    #[pallet::genesis_build]
+    impl<T: Config> GenesisBuild<T> for GenesisConfig<T> {
+        fn build(&self) {
+            self.pool_accounts
+                .iter()
+                .for_each(|(account_id, currency_id, initial_balance)| {
+                    <<T as pallet_loans::Config>::Currency as MultiCurrencyExtended<
+                        T::AccountId,
+                    >>::update_balance(
+                        *currency_id,
+                        account_id,
+                        (*initial_balance).try_into().unwrap(),
+                    )
+                    .unwrap();
+                });
+        }
     }
 
     #[pallet::pallet]
