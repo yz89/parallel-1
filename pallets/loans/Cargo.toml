@@ -16,7 +16,7 @@ orml-tokens       = { default-features = false, version = '0.4.0' }
 orml-traits       = { default-features = false, version = '0.4.0' }
 orml-utilities    = { default-features = false, version = '0.4.0' }
 pallet-ocw-oracle = { path = '../ocw-oracle', default-features = false, version = '3.0.0' }
-primitives        = { package = "parallel-primitives", path = "../../primitives", default-features = false }
+primitives        = { package = "parallel-primitives", path = "../../primitives", default-features = false, version = '3.0.0' }
 serde             = { version = "1", features = ["derive"] }
 sp-runtime        = { git = 'https://github.com/paritytech/substrate.git', branch = 'rococo-v1', version = "3.0.0", default-features = false }
 sp-std            = { git = 'https://github.com/paritytech/substrate.git', branch = 'rococo-v1', version = "3.0.0", default-features = false }

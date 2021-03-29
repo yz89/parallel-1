@@ -9,9 +9,8 @@ targets = ['x86_64-unknown-linux-gnu']
 
 [dependencies]
 codec         = { package = "parity-scale-codec", version = "2.0.0", default-features = false }
-frame-support = { version = "3.0.0", default-features = false }
-frame-system  = { version = "3.0.0", default-features = false }
-parking_lot   = "0.10.0"
+frame-support = { git = 'https://github.com/paritytech/substrate.git', branch = 'rococo-v1', version = "3.0.0", default-features = false }
+frame-system  = { git = 'https://github.com/paritytech/substrate.git', branch = 'rococo-v1', version = "3.0.0", default-features = false }
 serde         = { package = "alt_serde", version = "1", default-features = false, features = ["derive"] }
 serde_json    = { package = "alt_serde_json", version = "1", default-features = false, features = ["alloc"] }
 sp-core       = { git = 'https://github.com/paritytech/substrate.git', branch = 'rococo-v1', version = "3.0.0", default-features = false }
@@ -22,7 +21,7 @@ sp-std        = { git = 'https://github.com/paritytech/substrate.git', branch = 
 
 pallet-loans      = { path = '../loans', default-features = false, version = '3.0.0' }
 pallet-ocw-oracle = { path = '../ocw-oracle', default-features = false, version = '3.0.0' }
-primitives        = { package = "parallel-primitives", path = "../../primitives", default-features = false }
+primitives        = { package = "parallel-primitives", path = "../../primitives", default-features = false, version = '3.0.0' }
 
 
 [features]
