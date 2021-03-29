@@ -336,7 +336,7 @@ pub mod module {
                     let collateral_total_value = classify_collaterals.iter().fold(
                         Price::MIN,
                         |acc,&(_,_,_,total_sum_price,_)|
-							// acc + total_sum_price 
+							// acc + total_sum_price
 							match acc
 								.checked_add(total_sum_price)
 								.ok_or(Error::<T>::CaculateError)

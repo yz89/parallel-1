@@ -26,7 +26,7 @@ impl<T: Config> Pallet<T> {
         let mut pending_balances = Self::account_pending_balance(nominator);
         pending_balances.push(PendingBalance {
             balance: amount,
-            timestamp: <pallet_timestamp::Module<T>>::get(),
+            timestamp: <pallet_timestamp::Pallet<T>>::get(),
         });
         AccountPendingBalance::<T>::insert(nominator, pending_balances);
 
