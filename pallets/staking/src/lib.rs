@@ -53,7 +53,6 @@ pub mod module {
     }
 
     #[pallet::event]
-    #[pallet::generate_deposit(pub (crate) fn deposit_event)]
     pub enum Event<T: Config> {}
 
     #[pallet::storage]

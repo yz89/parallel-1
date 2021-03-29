@@ -12,10 +12,8 @@ impl<T: Config> Pallet<T> {
     /// Ensured atomic.
     #[transactional]
     pub fn stake_internal(who: &T::AccountId, amount: Balance) -> DispatchResult {
-        T::Currency::transfer(CurrencyId::DOT, who, &Self::account_id(), amount)?;
-        T::Currency::transfer(CurrencyId::xDOT, &Self::account_id(), who, amount)?;
-
-        Ok(())
+        T::Currency::transfer(CurrencyId::DOT, who, &Self::account_id(), amount)
+            .and_then(|_| T::Currency::transfer(CurrencyId::xDOT, &Self::account_id(), who, amount))
     }
     /// Sender redeems xDOTs in exchange for pending balance(Dot)
     ///
