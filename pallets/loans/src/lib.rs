@@ -12,10 +12,10 @@ use sp_std::vec::Vec;
 pub use module::*;
 
 mod loan;
-mod mock;
+// mod mock;
 mod rate;
 mod staking;
-mod tests;
+// mod tests;
 mod util;
 
 /// Container for borrow balance information
