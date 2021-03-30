@@ -1,7 +1,7 @@
 #![cfg_attr(not(feature = "std"), no_std)]
 
 use codec::{Decode, Encode};
-use frame_support::pallet_prelude::*;
+use frame_support::{log, pallet_prelude::*};
 use frame_system::{
     ensure_signed,
     offchain::{AppCrypto, CreateSignedTransaction, SendSignedTransaction, Signer},
@@ -141,9 +141,9 @@ pub mod module {
                     collateral_token,
                 );
                 match r {
-                    Ok(_) => debug::info!("success liquidate index: {:?}", i),
+                    Ok(_) => log::info!("success liquidate index: {:?}", i),
                     Err(e) => {
-                        debug::error!("error invoke liquidate call: {:?}", e);
+                        log::error!("error invoke liquidate call: {:?}", e);
                         continue;
                     }
                 }
@@ -187,7 +187,7 @@ pub mod module {
                         {
                             Ok((v, _)) => v,
                             Err(e) => {
-                                debug::error!("error msg: {:?}", e);
+                                log::error!("error msg: {:?}", e);
                                 Price::MIN
                             }
                         };
@@ -199,7 +199,7 @@ pub mod module {
                             ) {
                                 Ok(v) => v,
                                 Err(e) => {
-                                    debug::error!("error get borrow balance: {:?}", e);
+                                    log::error!("error get borrow balance: {:?}", e);
                                     continue 'outer;
                                 }
                             };
@@ -213,7 +213,7 @@ pub mod module {
                             {
                                 Ok(v) => v,
                                 Err(e) => {
-                                    debug::error!("error calculate borrow: {:?}", e);
+                                    log::error!("error calculate borrow: {:?}", e);
                                     continue 'outer;
                                 }
                             };
@@ -242,7 +242,7 @@ pub mod module {
                             {
                                 Ok(v) => v,
                                 Err(e) => {
-                                    debug::error!("error calculate collateral amount: {:?}", e);
+                                    log::error!("error calculate collateral amount: {:?}", e);
                                     continue 'outer;
                                 }
                             };
@@ -254,7 +254,7 @@ pub mod module {
                             {
                                 Ok(v) => v,
                                 Err(e) => {
-                                    debug::error!("error calculate collateral sum price: {:?}", e);
+                                    log::error!("error calculate collateral sum price: {:?}", e);
                                     continue 'outer;
                                 }
                             };
@@ -288,7 +288,7 @@ pub mod module {
 							{
 								Ok(v) => v,
 								Err(e) => {
-									debug::error!("error calculate liquidation threshold: {:?}",e);
+									log::error!("error calculate liquidation threshold: {:?}",e);
 									processing = false;
 									acc
 								}
@@ -308,7 +308,7 @@ pub mod module {
 							{
 								Ok(v) => v,
 								Err(e) => {
-									debug::error!("error calculate debt toal: {:?}",e);
+									log::error!("error calculate debt toal: {:?}",e);
 									processing = false;
 									acc
 								}
@@ -318,11 +318,11 @@ pub mod module {
                         continue;
                     }
 
-                    debug::info!(
+                    log::info!(
                         "_threshold_value: {:?}",
                         collateral_liquidation_threshold_value
                     );
-                    debug::info!("debt_total_value: {:?}", debt_total_value);
+                    log::info!("debt_total_value: {:?}", debt_total_value);
 
                     // 4 no need liquidate
                     if collateral_liquidation_threshold_value > debt_total_value {
@@ -343,7 +343,7 @@ pub mod module {
 							{
 								Ok(v) => v,
 								Err(e) => {
-									debug::error!("error calculate collateral toal: {:?}",e);
+									log::error!("error calculate collateral toal: {:?}",e);
 									processing = false;
 									acc
 								}
@@ -373,7 +373,7 @@ pub mod module {
                             {
                                 Ok(v) => v,
                                 Err(e) => {
-                                    debug::error!(
+                                    log::error!(
                                         "error calculate waiting_for_liquidation_vec: {:?}",
                                         e
                                     );
@@ -397,7 +397,7 @@ pub mod module {
                 }
                 return;
             }
-            debug::error!("offchain_worker error: get lock failed");
+            log::error!("offchain_worker error: get lock failed");
         }
 
         fn offchain_signed_tx(
@@ -414,16 +414,16 @@ pub mod module {
             // Display error if the signed tx fails.
             if let Some((acc, res)) = result {
                 if res.is_err() {
-                    debug::error!("failure: offchain_signed_tx: tx sent: {:?}", acc.id);
+                    log::error!("failure: offchain_signed_tx: tx sent: {:?}", acc.id);
                 } else {
-                    debug::info!(
+                    log::info!(
                         "successful: offchain_signed_tx: tx sent: {:?} index is {:?}",
                         acc.id,
                         acc.index
                     );
                 }
             } else {
-                debug::error!("No local account available");
+                log::error!("No local account available");
             }
         }
     }
@@ -431,7 +431,7 @@ pub mod module {
     impl<T: Config> rt_offchain::storage_lock::BlockNumberProvider for Pallet<T> {
         type BlockNumber = T::BlockNumber;
         fn current_block_number() -> Self::BlockNumber {
-            <frame_system::Module<T>>::block_number()
+            <frame_system::Pallet<T>>::block_number()
         }
     }
 }
