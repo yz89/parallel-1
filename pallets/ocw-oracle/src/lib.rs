@@ -166,8 +166,8 @@ pub mod module {
                 (CurrencyId::BTC, "https://api.coincap.io/v2/assets/bitcoin"),
                 (CurrencyId::KSM, "https://api.coincap.io/v2/assets/kusama"),
                 (
-                    CurrencyId::USDC,
-                    "https://api.coincap.io/v2/assets/usd-coin",
+                    CurrencyId::USDT,
+                    "https://api.coincap.io/v2/assets/tether",
                 ),
             ]
             .to_vec();
@@ -242,7 +242,7 @@ pub mod module {
             debug::info!("dot: {:?}", Prices::<T>::get(CurrencyId::DOT));
             debug::info!("btc: {:?}", Prices::<T>::get(CurrencyId::BTC));
             debug::info!("ksm: {:?}", Prices::<T>::get(CurrencyId::KSM));
-            debug::info!("usdc: {:?}", Prices::<T>::get(CurrencyId::USDC));
+            debug::info!("usdt: {:?}", Prices::<T>::get(CurrencyId::USDT));
             Self::append_price(payload);
             Self::deposit_event(Event::<T>::OffchainInvoke(None));
             Ok(().into())
