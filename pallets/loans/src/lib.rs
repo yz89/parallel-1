@@ -240,8 +240,8 @@ pub mod module {
     #[pallet::genesis_config]
     pub struct GenesisConfig {
         pub currencies: Vec<CurrencyId>,
-        // pub total_supply: Balance,
-        // pub total_borrows: Balance,
+        pub total_supply: Balance,
+        pub total_borrows: Balance,
         pub borrow_index: u128,
         pub exchange_rate: u128,
         pub base_rate: u128,
@@ -259,8 +259,8 @@ pub mod module {
         fn default() -> Self {
             GenesisConfig {
                 currencies: vec![],
-                // total_supply: 0,
-                // total_borrows: 0,
+                total_supply: 0,
+                total_borrows: 0,
                 borrow_index: 0,
                 exchange_rate: 0,
                 base_rate: 0,
@@ -279,8 +279,8 @@ pub mod module {
     impl<T: Config> GenesisBuild<T> for GenesisConfig {
         fn build(&self) {
             self.currencies.iter().for_each(|currency_id| {
-                // TotalSupply::<T>::insert(currency_id, self.total_supply);
-                // TotalBorrows::<T>::insert(currency_id, self.total_borrows);
+                TotalSupply::<T>::insert(currency_id, self.total_supply);
+                TotalBorrows::<T>::insert(currency_id, self.total_borrows);
                 ExchangeRate::<T>::insert(currency_id, self.exchange_rate);
                 BorrowIndex::<T>::insert(currency_id, self.borrow_index);
             });
