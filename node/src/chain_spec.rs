@@ -191,9 +191,8 @@ fn testnet_genesis(
                 CurrencyId::USDT,
                 CurrencyId::xDOT,
             ],
-            // util_ratio = 100 / 0.02 / 25000 = 0.2
-            total_supply: 20000 * TOKEN_DECIMAL, // 20000
-            total_borrows: 100 * TOKEN_DECIMAL,  // 100
+            total_supply: 0 * TOKEN_DECIMAL, // 0
+            total_borrows: 0 * TOKEN_DECIMAL,  // 0
             borrow_index: RATE_DECIMAL,                 // 1
             exchange_rate: 2 * RATE_DECIMAL / 100,      // 0.02
             base_rate: 2 * RATE_DECIMAL / 100,          // 0.02
