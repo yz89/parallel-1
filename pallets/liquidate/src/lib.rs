@@ -27,7 +27,7 @@ use sp_core::crypto::KeyTypeId;
 use sp_runtime::{
     offchain as rt_offchain,
     offchain::storage_lock::{BlockAndTime, StorageLock},
-    RuntimeDebug,
+    FixedPointNumber, RuntimeDebug,
 };
 use sp_std::prelude::*;
 
@@ -247,9 +247,8 @@ pub mod module {
                                 continue 'outer;
                             }
                             let exchange_rate = pallet_loans::ExchangeRate::<T>::get(currency_id);
-                            let collateral_currency_amount = match collateral_ctoken_amount
-                                .checked_mul(exchange_rate)
-                                .and_then(|r| r.checked_div(RATE_DECIMAL))
+                            let collateral_currency_amount = match exchange_rate
+                                .checked_mul_int(collateral_ctoken_amount)
                                 .ok_or(Error::<T>::CaculateError)
                             {
                                 Ok(v) => v,
