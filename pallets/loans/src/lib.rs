@@ -64,6 +64,8 @@ pub mod pallet {
 
     use super::*;
 
+    type AssetIdOf<T> = <<T as Config>::Assets as pallet_assets::Config>::AssetId;
+
     #[pallet::config]
     pub trait Config: frame_system::Config {
         type Event: From<Event<Self>> + IsType<<Self as frame_system::Config>::Event>;
@@ -97,7 +99,7 @@ pub mod pallet {
         /// Unix time
         type UnixTime: UnixTime;
 
-        /// Assets type for deposit/withdraw collateral assets to/from loans module
+        /// Assets for deposit/withdraw collateral assets to/from loans module
         type Assets: Transfer<Self::AccountId> + Inspect<Self::AccountId> + Mutate<Self::AccountId>;
     }
 
@@ -141,32 +143,33 @@ pub mod pallet {
 
     #[pallet::event]
     #[pallet::generate_deposit(pub (crate) fn deposit_event)]
-    pub enum Event<T: Config> {
+	#[pallet::metadata(T::AccountId = "AccountId", AssetIdOf<T> = "AssetId")]
+	pub enum Event<T: Config> {
         /// Enable collateral for certain asset
-        /// [sender, currency_id]
-        CollateralAssetAdded(T::AccountId, CurrencyId),
+        /// [sender, asset_id]
+        CollateralAssetAdded(T::AccountId, AssetIdOf<T>),
         /// Disable collateral for certain asset
-        /// [sender, currency_id]
-        CollateralAssetRemoved(T::AccountId, CurrencyId),
+        /// [sender, asset_id]
+        CollateralAssetRemoved(T::AccountId, AssetIdOf<T>),
         /// Event emitted when assets are deposited
-        /// [sender, currency_id, amount]
-        Deposited(T::AccountId, CurrencyId, Balance),
+        /// [sender, asset_id, amount]
+        Deposited(T::AccountId, AssetIdOf<T>, Balance),
         /// Event emitted when assets are redeemed
-        /// [sender, currency_id, amount]
-        Redeemed(T::AccountId, CurrencyId, Balance),
+        /// [sender, asset_id, amount]
+        Redeemed(T::AccountId, AssetIdOf<T>, Balance),
         /// Event emitted when cash is borrowed
-        /// [sender, currency_id, amount]
-        Borrowed(T::AccountId, CurrencyId, Balance),
+        /// [sender, asset_id, amount]
+        Borrowed(T::AccountId, AssetIdOf<T>, Balance),
         /// Event emitted when a borrow is repaid
-        /// [sender, currency_id, amount]
-        RepaidBorrow(T::AccountId, CurrencyId, Balance),
+        /// [sender, asset_id, amount]
+        RepaidBorrow(T::AccountId, AssetIdOf<T>, Balance),
         /// Event emitted when a borrow is liquidated
         /// [liquidator, borrower, liquidate_token, collateral_token, repay_amount, collateral_amount]
         LiquidatedBorrow(
             T::AccountId,
             T::AccountId,
-            CurrencyId,
-            CurrencyId,
+            AssetIdOf<T>,
+            AssetIdOf<T>,
             Balance,
             Balance,
         ),
@@ -174,14 +177,14 @@ pub mod pallet {
         /// [new_interest_rate_model]
         NewMarket(Market),
         /// Event emitted when the reserves are reduced
-        /// [admin, currency_id, reduced_amount, total_reserves]
-        ReservesReduced(T::AccountId, CurrencyId, Balance, Balance),
+        /// [admin, asset_id, reduced_amount, total_reserves]
+        ReservesReduced(T::AccountId, AssetIdOf<T>, Balance, Balance),
         /// Event emitted when the reserves are added
-        /// [admin, currency_id, added_amount, total_reserves]
-        ReservesAdded(T::AccountId, CurrencyId, Balance, Balance),
+        /// [admin, asset_id, added_amount, total_reserves]
+        ReservesAdded(T::AccountId, AssetIdOf<T>, Balance, Balance),
         /// Event emitted when a market is activated
-        /// [admin, currency_id]
-        ActivatedMarket(CurrencyId),
+        /// [admin, asset_id]
+        ActivatedMarket(AssetIdOf<T>),
     }
 
     /// The timestamp of the previous block or defaults to timestamp at genesis.
@@ -193,29 +196,29 @@ pub mod pallet {
     /// CollateralType -> Balance
     #[pallet::storage]
     #[pallet::getter(fn total_supply)]
-    pub type TotalSupply<T: Config> = StorageMap<_, Twox64Concat, CurrencyId, Balance, ValueQuery>;
+    pub type TotalSupply<T: Config> = StorageMap<_, Blake2_128Concat, AssetIdOf<T>, Balance, ValueQuery>;
 
     /// Total amount of outstanding borrows of the underlying in this market
-    /// CurrencyType -> Balance
+    /// AssetId -> Balance
     #[pallet::storage]
     #[pallet::getter(fn total_borrows)]
-    pub type TotalBorrows<T: Config> = StorageMap<_, Twox64Concat, CurrencyId, Balance, ValueQuery>;
+    pub type TotalBorrows<T: Config> = StorageMap<_, Blake2_128Concat, AssetIdOf<T>, Balance, ValueQuery>;
 
     /// Total amount of reserves of the underlying held in this market
-    /// CurrencyType -> Balance
+    /// AssetId -> Balance
     #[pallet::storage]
     #[pallet::getter(fn total_reserves)]
     pub type TotalReserves<T: Config> =
-        StorageMap<_, Twox64Concat, CurrencyId, Balance, ValueQuery>;
+        StorageMap<_, Blake2_128Concat, AssetIdOf<T>, Balance, ValueQuery>;
 
     /// Mapping of account addresses to outstanding borrow balances
-    /// CurrencyType -> Owner -> BorrowSnapshot
+    /// AssetId -> Owner -> BorrowSnapshot
     #[pallet::storage]
     #[pallet::getter(fn account_borrows)]
     pub type AccountBorrows<T: Config> = StorageDoubleMap<
         _,
-        Twox64Concat,
-        CurrencyId,
+        Blake2_128Concat,
+        AssetIdOf<T>,
         Blake2_128Concat,
         T::AccountId,
         BorrowSnapshot,
@@ -228,8 +231,8 @@ pub mod pallet {
     #[pallet::getter(fn account_deposits)]
     pub type AccountDeposits<T: Config> = StorageDoubleMap<
         _,
-        Twox64Concat,
-        CurrencyId,
+        Blake2_128Concat,
+        AssetIdOf<T>,
         Blake2_128Concat,
         T::AccountId,
         Deposits,
@@ -237,13 +240,13 @@ pub mod pallet {
     >;
 
     /// Mapping of account addresses to total deposit interest accrual
-    /// CurrencyType -> Owner -> EarnedSnapshot
+    /// AssetId -> Owner -> EarnedSnapshot
     #[pallet::storage]
     #[pallet::getter(fn account_earned)]
     pub type AccountEarned<T: Config> = StorageDoubleMap<
         _,
-        Twox64Concat,
-        CurrencyId,
+        Blake2_128Concat,
+        AssetIdOf<T>,
         Blake2_128Concat,
         T::AccountId,
         EarnedSnapshot,
@@ -251,35 +254,35 @@ pub mod pallet {
     >;
 
     /// Accumulator of the total earned interest rate since the opening of the market
-    /// CurrencyType -> u128
+    /// AssetId -> u128
     #[pallet::storage]
     #[pallet::getter(fn borrow_index)]
-    pub type BorrowIndex<T: Config> = StorageMap<_, Twox64Concat, CurrencyId, Rate, ValueQuery>;
+    pub type BorrowIndex<T: Config> = StorageMap<_, Blake2_128Concat, AssetIdOf<T>, Rate, ValueQuery>;
 
     /// The exchange rate from the underlying to the internal collateral
     #[pallet::storage]
     #[pallet::getter(fn exchange_rate)]
-    pub type ExchangeRate<T: Config> = StorageMap<_, Twox64Concat, CurrencyId, Rate, ValueQuery>;
+    pub type ExchangeRate<T: Config> = StorageMap<_, Blake2_128Concat, AssetIdOf<T>, Rate, ValueQuery>;
 
     /// Mapping of borrow rate to currency type
     #[pallet::storage]
     #[pallet::getter(fn borrow_rate)]
-    pub type BorrowRate<T: Config> = StorageMap<_, Twox64Concat, CurrencyId, Rate, ValueQuery>;
+    pub type BorrowRate<T: Config> = StorageMap<_, Blake2_128Concat, AssetIdOf<T>, Rate, ValueQuery>;
 
     /// Mapping of supply rate to currency type
     #[pallet::storage]
     #[pallet::getter(fn supply_rate)]
-    pub type SupplyRate<T: Config> = StorageMap<_, Twox64Concat, CurrencyId, Rate, ValueQuery>;
+    pub type SupplyRate<T: Config> = StorageMap<_, Blake2_128Concat, AssetIdOf<T>, Rate, ValueQuery>;
 
     /// Borrow utilization ratio
     #[pallet::storage]
     #[pallet::getter(fn utilization_ratio)]
     pub type UtilizationRatio<T: Config> =
-        StorageMap<_, Twox64Concat, CurrencyId, Ratio, ValueQuery>;
+        StorageMap<_, Blake2_128Concat, AssetIdOf<T>, Ratio, ValueQuery>;
 
-    /// Mapping of currency id to its market
+    /// Mapping of asset id to its market
     #[pallet::storage]
-    pub type Markets<T: Config> = StorageMap<_, Twox64Concat, CurrencyId, Market>;
+    pub type Markets<T: Config> = StorageMap<_, Blake2_128Concat, AssetIdOf<T>, Market>;
 
     #[pallet::genesis_config]
     pub struct GenesisConfig {
@@ -304,18 +307,7 @@ pub mod pallet {
     #[pallet::genesis_build]
     impl<T: Config> GenesisBuild<T> for GenesisConfig {
         fn build(&self) {
-            self.markets.iter().for_each(|(currency_id, market)| {
-                if !market.rate_model.check_model() {
-                    panic!(
-                        "Could not initialize the interest rate model!!! {:#?}",
-                        currency_id
-                    );
-                }
-                BorrowIndex::<T>::insert(currency_id, self.borrow_index);
-                ExchangeRate::<T>::insert(currency_id, self.exchange_rate);
-                Markets::<T>::insert(currency_id, market)
-            });
-            LastBlockTimestamp::<T>::put(self.last_block_timestamp);
+
         }
     }
 
@@ -368,8 +360,8 @@ pub mod pallet {
             });
 
             // This is used to trigger the price aggregation to update the results to the ORML Oracle Pallet.
-            for (currency_id, _) in Self::active_markets() {
-                let _ = Self::get_price(&currency_id);
+            for (asset_id, _) in Self::active_markets() {
+                let _ = Self::get_price(&asset_id);
             }
         }
     }
