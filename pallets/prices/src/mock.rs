@@ -19,6 +19,7 @@ use frame_support::{construct_runtime, ord_parameter_types, parameter_types, tra
 use frame_system::EnsureSignedBy;
 use sp_core::H256;
 use sp_runtime::{testing::Header, traits::IdentityLookup, FixedPointNumber};
+pub use primitives::tokens::{DOT, XDOT, KSM, XKSM};
 
 pub type AccountId = u128;
 pub type BlockNumber = u64;
@@ -26,13 +27,6 @@ pub type BlockNumber = u64;
 mod prices {
     pub use super::super::*;
 }
-
-pub const DOT: CurrencyId = 10;
-#[allow(non_upper_case_globals)]
-pub const xDOT: CurrencyId = 11;
-pub const KSM: CurrencyId = 20;
-#[allow(non_upper_case_globals)]
-pub const xKSM: CurrencyId = 21;
 
 parameter_types! {
     pub const BlockHashCount: u64 = 250;
@@ -101,16 +95,14 @@ impl ExchangeRateProvider for LiquidStakingExchangeRateProvider {
 
 ord_parameter_types! {
     pub const One: AccountId = 1;
-    pub const StakingCurrency: CurrencyId = KSM;
-    pub const LiquidCurrency: CurrencyId = xKSM;
 }
 pub struct Decimal;
 #[allow(non_upper_case_globals)]
 impl DecimalProvider for Decimal {
     fn get_decimal(asset_id: &CurrencyId) -> Option<u8> {
         match *asset_id {
-            DOT | xDOT => Some(10),
-            KSM | xKSM => Some(12),
+            DOT | XDOT => Some(10),
+            KSM | XKSM => Some(12),
             _ => None,
         }
     }
@@ -122,7 +114,7 @@ impl LiquidStakingCurrenciesProvider<CurrencyId> for LiquidStaking {
         Some(KSM)
     }
     fn get_liquid_currency() -> Option<CurrencyId> {
-        Some(xKSM)
+        Some(XKSM)
     }
 }
 
