@@ -12,22 +12,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use cumulus_primitives_core::ParaId;
 use heiko_runtime::{
     opaque::SessionKeys, BalancesConfig, CollatorSelectionConfig, DemocracyConfig,
-    GeneralCouncilConfig, GeneralCouncilMembershipConfig, GenesisConfig,
-    LiquidStakingAgentMembershipConfig, LiquidStakingConfig, OracleMembershipConfig,
-    ParachainInfoConfig, PolkadotXcmConfig, SessionConfig, SudoConfig, SystemConfig,
-    TechnicalCommitteeMembershipConfig, ValidatorFeedersMembershipConfig, VestingConfig,
-    WASM_BINARY,
+    GeneralCouncilConfig, GeneralCouncilMembershipConfig, GenesisConfig, LiquidStakingConfig,
+    OracleMembershipConfig, ParachainInfoConfig, PolkadotXcmConfig, SessionConfig, SudoConfig,
+    SystemConfig, TechnicalCommitteeMembershipConfig, ValidatorFeedersMembershipConfig,
+    VestingConfig, WASM_BINARY,
 };
-
-// use hex_literal::hex;
-// use sp_core::crypto::UncheckedInto;
 use primitives::*;
 use sc_service::ChainType;
 use sc_telemetry::TelemetryEndpoints;
 use sp_consensus_aura::sr25519::AuthorityId as AuraId;
+
+// use hex_literal::hex;
+// use sp_core::crypto::UncheckedInto;
 
 use crate::chain_spec::{
     accumulate, as_properties, get_account_id_from_seed, get_authority_keys_from_seed, Extensions,
@@ -55,7 +53,6 @@ pub fn heiko_dev_config(id: ParaId) -> ChainSpec {
             ];
             let oracle_accounts = vec![get_account_id_from_seed::<sr25519::Public>("Ferdie")];
             let validator_feeders = vec![get_account_id_from_seed::<sr25519::Public>("Eve")];
-            let liquid_staking_agents = vec![get_account_id_from_seed::<sr25519::Public>("Dave")];
             let initial_allocation: Vec<(AccountId, Balance)> = accumulate(
                 vec![
                     // Faucet accounts
@@ -104,7 +101,6 @@ pub fn heiko_dev_config(id: ParaId) -> ChainSpec {
                 oracle_accounts,
                 initial_allocation,
                 validator_feeders,
-                liquid_staking_agents,
                 council,
                 technical_committee,
                 id,
@@ -158,7 +154,6 @@ pub fn heiko_config(_id: ParaId) -> Result<ChainSpec, String> {
     //         ];
     //         let oracle_accounts = vec![];
     //         let validator_feeders = vec![];
-    //         let liquid_staking_agents = vec![];
     //         let initial_allocation: Vec<(AccountId, Balance)> = serde_json::from_str(include_str!(
     //             "../../../../resources/heiko-allocation-HKO.json"
     //         ))
@@ -173,16 +168,20 @@ pub fn heiko_config(_id: ParaId) -> Result<ChainSpec, String> {
     //             oracle_accounts,
     //             initial_allocation,
     //             validator_feeders,
-    //             liquid_staking_agents,
     //             council,
     //             technical_committee,
     //             id,
     //         )
     //     },
     //     vec![
-    //         "/dns/heiko-bootnode-0.parallel.fi/tcp/30333/p2p/12D3KooWLUTzbrJJDowUKMPfEZrDY6eH8HXvm8hrG6YrdUmdrKPz".parse().unwrap(),
-    //         "/dns/heiko-bootnode-1.parallel.fi/tcp/30333/p2p/12D3KooWEckTASdnkQC8MfBNnzKGfQJmdmzCBWrwra26nTqY4Hmu".parse().unwrap(),
-    //         "/dns/heiko-bootnode-2.parallel.fi/tcp/30333/p2p/12D3KooWFJe4LfS15nTBUduq3cMKmHEWwKYrJFmMnAa7wT5W1eZE".parse().unwrap(),
+    //          "/dns/heiko-bootnode-0.parallel.fi/tcp/30333/p2p/12D3KooWLUTzbrJJDowUKMPfEZrDY6eH8HXvm8hrG6YrdUmdrKPz".parse().unwrap(),
+    //          "/dns/heiko-bootnode-1.parallel.fi/tcp/30333/p2p/12D3KooWEckTASdnkQC8MfBNnzKGfQJmdmzCBWrwra26nTqY4Hmu".parse().unwrap(),
+    //          "/dns/heiko-bootnode-2.parallel.fi/tcp/30333/p2p/12D3KooWFJe4LfS15nTBUduq3cMKmHEWwKYrJFmMnAa7wT5W1eZE".parse().unwrap(),
+    //          "/dns/heiko-bootnode-3.parallel.fi/tcp/30333/p2p/12D3KooWA8jSwEbscptbwv1KqY7d7n2qURbd6zUaaPvzTVBMMgSd".parse().unwrap(),
+    //          "/dns/heiko-bootnode-4.parallel.fi/tcp/30333/p2p/12D3KooWPmc7C5qkcxLzw5qWuxHM4SQs16w9Ecdy6b6zpPzpuPhX".parse().unwrap(),
+    //          "/dns/heiko-bootnode-5.parallel.fi/tcp/30333/p2p/12D3KooWBPS34UM3bbv82hfL3LJq7eioRjFSJp6JArGnEj4ZhukN".parse().unwrap(),
+    //          "/dns/heiko-bootnode-6.parallel.fi/tcp/30333/p2p/12D3KooWNQD9ejZBon81yJuLeV6PWekVqVPX6B72UPepQzWTh8mX".parse().unwrap(),
+    //          "/dns/heiko-bootnode-7.parallel.fi/tcp/30333/p2p/12D3KooWL63x8ZPkY2ZekUqyvyNwsakwbuy8Rq3Dt9tJcxw5NFTt".parse().unwrap()
     //     ],
     //     TelemetryEndpoints::new(vec![(TELEMETRY_URL.into(), 0)]).ok(),
     //     Some("heiko"),
@@ -200,7 +199,6 @@ fn heiko_genesis(
     oracle_accounts: Vec<AccountId>,
     initial_allocation: Vec<(AccountId, Balance)>,
     validator_feeders: Vec<AccountId>,
-    liquid_staking_agents: Vec<AccountId>,
     council: Vec<AccountId>,
     technical_committee: Vec<AccountId>,
     id: ParaId,
@@ -259,10 +257,6 @@ fn heiko_genesis(
         treasury: Default::default(),
         oracle_membership: OracleMembershipConfig {
             members: oracle_accounts,
-            phantom: Default::default(),
-        },
-        liquid_staking_agent_membership: LiquidStakingAgentMembershipConfig {
-            members: liquid_staking_agents,
             phantom: Default::default(),
         },
         validator_feeders_membership: ValidatorFeedersMembershipConfig {

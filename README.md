@@ -1,6 +1,5 @@
 ![ghimage](https://user-images.githubusercontent.com/4702705/127602037-7ba2faf1-8459-493b-b1d6-2dc062aa6249.png)
 
-
 [![GitHub last commit](https://img.shields.io/github/last-commit/parallel-finance/parallel)](https://github.com/parallel-finance/parallel/commits/master)
 [![CI](https://github.com/parallel-finance/parallel/workflows/CI/badge.svg)](https://github.com/parallel-finance/parallel/actions)
 [![Codecov](https://codecov.io/gh/parallel-finance/parallel/branch/master/graph/badge.svg)](https://codecov.io/gh/parallel-finance/parallel)
@@ -27,11 +26,15 @@ which those capabilities are implemented. You can learn more about
 [The Path of Parachain Block](https://polkadot.network/the-path-of-a-parachain-block/) on the
 official Polkadot Blog.
 
-Click [here](https://github.com/parallel-finance/parallel/blob/master/docs/DEVELOPER-GUIDE.md) to jump to developer guide.
+Click the following guides for more details:
+
+- [DEVELOPER GUIDE](https://github.com/parallel-finance/parallel/blob/master/docs/DEVELOPER-GUIDE.md)
+- [LAUNCH GUIDE](https://github.com/parallel-finance/parallel/blob/master/docs/LAUNCH.md)
+- [COLLATOR GUIDE](https://github.com/parallel-finance/parallel/blob/master/docs/COLLATOR.md)
 
 ## Open Source Credits
 
 We would like to thank the following projects.
 
--   [Compound](https://compound.finance/)
--   [ORML](https://github.com/open-web3-stack/open-runtime-module-library)
+- [Compound](https://compound.finance/)
+- [ORML](https://github.com/open-web3-stack/open-runtime-module-library)

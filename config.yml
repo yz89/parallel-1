@@ -1,19 +1,32 @@
 relaychain:
-  image: parallelfinance/polkadot:v0.9.11
+  image: parallelfinance/polkadot:v0.9.12-1
   chain: kusama-local
   runtimeGenesisConfig:
     configuration:
       config:
         validation_upgrade_frequency: 1
         validation_upgrade_delay: 1
+    hrmp:
+      preopenHrmpChannels:
+        - sender: 2085
+          recipient: 2000
+          maxCapacity: 8
+          maxMessageSize: 102400
+        - sender: 2000
+          recipient: 2085
+          maxCapacity: 8
+          maxMessageSize: 102400
   flags:
     - --rpc-methods=unsafe
     - --no-beefy
+    - --wasm-execution=compiled
+    - --execution=wasm
     - -lxcm=trace
   nodes:
     - name: alice
     - name: bob
     - name: charlie
+    - name: dave
 
 parachains:
   - image: parallelfinance/parallel:latest
@@ -29,7 +42,13 @@ parachains:
     flags:
       - --rpc-methods=unsafe
       - --force-authoring
+      - --wasm-execution=compiled
+      - --execution=wasm
+      - -lxcm=trace
+      - -lloans=trace
     relaychainFlags:
+      - --wasm-execution=compiled
+      - --execution=wasm
       - --no-beefy
     nodes:
       - flags:
@@ -39,25 +58,30 @@ parachains:
       - flags:
           - --charlie
 
-  # - image: parallelfinance/statemine:v0.9.11
-  #   chain:
-  #     base: statemint-dev
-  #     collators:
-  #       - alice
-  #       - bob
-  #       - charlie
-  #     sudo: dave
-  #   id: 1000
-  #   parachain: true
-  #   flags:
-  #     - --rpc-methods=unsafe
-  #     - --force-authoring
-  #   relaychainFlags:
-  #     - --no-beefy
-  #   nodes:
-  #     - flags:
-  #         - --alice
-  #     - flags:
-  #         - --bob
-  #     - flags:
-  #         - --charlie
+  - image: parallelfinance/karura:v0.9.12
+    chain:
+      base: karura-dev
+      collators:
+        - alice
+        - bob
+        - charlie
+      sudo: dave
+    id: 2000
+    parachain: true
+    flags:
+      - --rpc-methods=unsafe
+      - --force-authoring
+      - --wasm-execution=compiled
+      - --execution=wasm
+    relaychainFlags:
+      - --wasm-execution=compiled
+      - --execution=wasm
+      - --no-beefy
+    volumePath: /acala/data
+    nodes:
+      - flags:
+          - --alice
+      - flags:
+          - --bob
+      - flags:
+          - --charlie

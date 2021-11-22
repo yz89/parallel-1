@@ -17,6 +17,7 @@
 pub mod currency;
 pub mod network;
 pub mod tokens;
+pub mod ump;
 
 use codec::{Decode, Encode};
 use sp_runtime::{
@@ -87,6 +88,8 @@ pub type TimeStampedPrice = orml_oracle::TimestampedValue<Price, Moment>;
 
 pub use sp_consensus_aura::sr25519::AuthorityId as AuraId;
 
+pub use cumulus_primitives_core::ParaId;
+
 #[derive(Encode, Decode, Eq, PartialEq, Copy, Clone, RuntimeDebug, PartialOrd, Ord)]
 #[cfg_attr(feature = "std", derive(Serialize, Deserialize))]
 pub enum DataProviderId {
@@ -98,7 +101,7 @@ pub trait PriceFeeder {
     fn get_price(asset_id: &CurrencyId) -> Option<PriceDetail>;
 }
 
-pub trait DecimalProvider {
+pub trait DecimalProvider<CurrencyId> {
     fn get_decimal(asset_id: &CurrencyId) -> Option<u8>;
 }
 
@@ -127,8 +130,4 @@ pub trait AMM<T: frame_system::Config, CurrencyId, Balance> {
         amount_in: Balance,
         minimum_amount_out: Balance,
     ) -> Result<Balance, frame_support::pallet_prelude::DispatchError>;
-}
-
-pub trait DerivativeProvider<AccountId> {
-    fn derivative_account_id(who: AccountId, index: u16) -> AccountId;
 }

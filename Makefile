@@ -1,12 +1,13 @@
 PARA_ID        							:= 2085
 CHAIN          							:= vanilla-dev
+RUNTIME        							:= vanilla-runtime
 BLOCK_AT       							:= 0x0000000000000000000000000000000000000000000000000000000000000000
 URL            							:= ws://localhost:9947
 KEYSTORE_PATH  							:= keystore
 SURI           							:= //Alice
 LAUNCH_CONFIG  							:= config.yml
 DOCKER_TAG     							:= latest
-RELAY_DOCKER_TAG						:= v0.9.11
+RELAY_DOCKER_TAG						:= v0.9.12
 
 .PHONY: init
 init: submodules
@@ -18,6 +19,7 @@ init: submodules
 .PHONY: submodules
 submodules:
 	git submodule update --init --recursive
+	git submodule foreach git pull origin master
 
 .PHONY: build
 build:
@@ -87,6 +89,7 @@ launch: shutdown
 	docker image pull parallelfinance/polkadot:$(RELAY_DOCKER_TAG)
 	docker image pull parallelfinance/parallel:$(DOCKER_TAG)
 	docker image pull parallelfinance/stake-client:latest
+	docker image pull parallelfinance/liquidation-client:latest
 	docker image pull parallelfinance/nominate-client:latest
 	docker image pull parallelfinance/oracle-client:latest
 	docker image pull parallelfinance/parallel-dapp:latest
@@ -99,7 +102,7 @@ logs:
 
 .PHONY: wasm
 wasm:
-	./scripts/srtool-build.sh
+	PACKAGE=$(RUNTIME) ./scripts/srtool-build.sh
 
 .PHONY: spec
 spec:
@@ -113,18 +116,22 @@ image:
 		-f Dockerfile.release \
 		. --network=host
 
+.PHONY: key
+key:
+	docker run --rm parallelfinance/parallel:$(DOCKER_TAG) key generate-node-key
+
 .PHONY: keystore
 keystore:
-	docker run --rm -v "$(PWD):/app" parallelfinance/parallel:latest key insert -d /app --keystore-path /app/$(KEYSTORE_PATH) --suri "$(SURI)" --key-type aura
-	docker run --rm -v "$(PWD):/app" parallelfinance/parallel:latest key insert -d /app --keystore-path /app/$(KEYSTORE_PATH) --suri "$(SURI)" --key-type gran
+	cargo run --bin parallel key insert -d . --keystore-path $(KEYSTORE_PATH) --suri "$(SURI)" --key-type aura
+	cargo run --bin parallel key insert -d . --keystore-path $(KEYSTORE_PATH) --suri "$(SURI)" --key-type gran
 
 .PHONY: snapshot
 snapshot:
-	cargo run --bin parallel --features try-runtime -- try-runtime --chain $(CHAIN) --wasm-execution=compiled --block-at=$(BLOCK_AT) --url=$(URL) on-runtime-upgrade live -s snapshot.bin
+	cargo run --bin parallel --features try-runtime -- try-runtime --chain $(CHAIN) --wasm-execution=compiled on-runtime-upgrade live -a=$(BLOCK_AT) -u=$(URL) -s=snapshot.bin
 
 .PHONY: try-runtime-upgrade
 try-runtime-upgrade:
-	RUST_LOG=debug cargo run --bin parallel --features try-runtime -- try-runtime --chain $(CHAIN) --wasm-execution=compiled --block-at=$(BLOCK_AT) on-runtime-upgrade snap -s snapshot.bin
+	RUST_LOG=debug cargo run --bin parallel --features try-runtime -- try-runtime --chain $(CHAIN) --wasm-execution=compiled on-runtime-upgrade snap -s snapshot.bin
 
 help:
 	@grep -E '^[a-zA-Z_-]+:.*?' Makefile | cut -d: -f1 | sort

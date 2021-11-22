@@ -1,6 +1,6 @@
 use crate::{
     mock::*,
-    types::{MatchingLedger, RewardDestination, StakingSettlementKind},
+    types::{MatchingLedger, StakingSettlementKind},
     *,
 };
 
@@ -8,12 +8,11 @@ use frame_support::{assert_err, assert_ok, traits::Hooks};
 
 use primitives::{
     tokens::{DOT, XDOT},
+    ump::{RewardDestination, XcmWeightMisc},
     Balance, Rate,
 };
 use sp_runtime::traits::One;
 use xcm_simulator::TestExt;
-
-use types::*;
 
 #[test]
 fn stake_fails_due_to_exceed_capacity() {
@@ -88,24 +87,43 @@ fn test_record_staking_settlement_ok() {
     new_test_ext().execute_with(|| {
         assert_ok!(LiquidStaking::record_staking_settlement(
             Origin::signed(ALICE),
-            dot(100f64),
+            dot(200f64),
             StakingSettlementKind::Reward
         ));
 
-        assert_eq!(LiquidStaking::exchange_rate(), Rate::from(1));
+        assert_eq!(LiquidStaking::exchange_rate(), Rate::from(2));
     })
 }
 
 #[test]
-fn test_duplicated_record_staking_settlement() {
+fn test_record_slash_should_not_change_exchange_rate_and_increase_total_slashed() {
     new_test_ext().execute_with(|| {
         LiquidStaking::record_staking_settlement(
             Origin::signed(ALICE),
-            100,
-            StakingSettlementKind::Reward,
+            dot(1f64),
+            StakingSettlementKind::Slash,
         )
         .unwrap();
+
+        assert_eq!(LiquidStaking::exchange_rate(), Rate::from(1));
+        assert_eq!(LiquidStaking::total_slashed(), dot(1f64));
     })
+}
+
+#[test]
+fn test_payout_slashed_should_work() {
+    TestNet::reset();
+
+    ParaA::execute_with(|| {
+        LiquidStaking::stake(Origin::signed(ALICE), dot(10000f64)).unwrap();
+        LiquidStaking::record_staking_settlement(
+            Origin::signed(ALICE),
+            dot(0.1f64),
+            StakingSettlementKind::Slash,
+        )
+        .unwrap();
+        assert_ok!(LiquidStaking::payout_slashed(Origin::signed(ALICE)));
+    });
 }
 
 enum StakeOp {
@@ -160,13 +178,6 @@ fn test_settlement_should_work() {
             Pallet::<Test>::on_idle(0, 10000);
         }
     });
-    Relay::execute_with(|| {
-        assert_eq!(
-            RelayBalances::free_balance(&LiquidStaking::para_account_id()),
-            // FIXME: weight should be take into account
-            9999800000000000
-        );
-    });
 }
 
 #[test]
@@ -185,7 +196,7 @@ fn test_transact_bond_work() {
             RewardDestination::Staked
         ));
 
-        ParaSystem::assert_has_event(mock::Event::LiquidStaking(crate::Event::BondCallSent(
+        ParaSystem::assert_has_event(mock::Event::LiquidStaking(crate::Event::Bonding(
             LiquidStaking::derivative_para_account_id(),
             3 * DOT_DECIMAL,
             RewardDestination::Staked,
@@ -302,8 +313,8 @@ fn test_transact_withdraw_unbonded_work() {
             2 * DOT_DECIMAL,
         )));
 
-        pallet_staking::CurrentEra::<WestendRuntime>::put(
-            <WestendRuntime as pallet_staking::Config>::BondingDuration::get(),
+        pallet_staking::CurrentEra::<KusamaRuntime>::put(
+            <KusamaRuntime as pallet_staking::Config>::BondingDuration::get(),
         );
     });
 
@@ -420,10 +431,10 @@ fn test_transfer_bond() {
             xcm_transfer_amount,
             RewardDestination::Staked
         ));
-        print_events::<Test>("ParaA");
+        // print_events::<Test>("ParaA");
     });
     Relay::execute_with(|| {
-        print_events::<westend_runtime::Runtime>("Relay");
+        // print_events::<kusama_runtime::Runtime>("Relay");
         let ledger = RelayStaking::ledger(LiquidStaking::derivative_para_account_id()).unwrap();
         assert_eq!(ledger.total, xcm_transfer_amount);
         assert_eq!(
@@ -437,12 +448,12 @@ fn test_transfer_bond() {
     });
 }
 
-fn print_events<T: frame_system::Config>(context: &str) {
-    println!("------ {:?} events ------", context);
-    frame_system::Pallet::<T>::events().iter().for_each(|r| {
-        println!("{:?}", r.event);
-    });
-}
+// fn print_events<T: frame_system::Config>(context: &str) {
+//     println!("------ {:?} events ------", context);
+//     frame_system::Pallet::<T>::events().iter().for_each(|r| {
+//         println!("{:?}", r.event);
+//     });
+// }
 
 #[test]
 fn test_update_xcm_weight_work() {
@@ -455,6 +466,9 @@ fn test_update_xcm_weight_work() {
             rebond_weight: 4,
             withdraw_unbonded_weight: 5,
             nominate_weight: 6,
+            contribute_weight: 7,
+            withdraw_weight: 8,
+            add_memo_weight: 9,
         };
         assert_ok!(LiquidStaking::update_xcm_weight(Origin::signed(BOB), misc));
         assert_eq!(XcmWeight::<Test>::get(), misc);

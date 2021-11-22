@@ -16,18 +16,27 @@ PARA_P2P_PORT=30333
 
 PARA_ID=2085
 
-PARA_CHAIN="heiko"
-RELAY_CHAIN="kusama"
+PARA_CHAIN="${2:-heiko}"
+RELAY_CHAIN="${3:-kusama}"
 VOLUME="chains"
+NODE_NAME="$1"
 
-docker container stop heiko-fullnode || true
-docker container rm heiko-fullnode || true
+if [ $# -lt 1 ]; then
+  echo "help: ./fullnode.sh <NODE_NAME>" && exit 1
+fi
+
+if [[ "$PARA_CHAIN" == "parallel" ]]; then
+  PARA_ID=2012
+fi
+
+docker container stop $PARA_CHAIN-fullnode || true
+docker container rm $PARA_CHAIN-fullnode || true
 
 # docker volume rm $VOLUME || true
 
 docker volume create $VOLUME || true
 
-docker run --restart=always --name heiko-fullnode \
+docker run --restart=always --name $PARA_CHAIN-fullnode \
   -d \
   -p $PARA_WS_PORT:$PARA_WS_PORT \
   -p $PARA_RPC_PORT:$PARA_RPC_PORT \
@@ -36,7 +45,7 @@ docker run --restart=always --name heiko-fullnode \
   -p $RELAY_RPC_PORT:$RELAY_RPC_PORT \
   -p $RELAY_P2P_PORT:$RELAY_P2P_PORT \
   -v "$VOLUME:/data" \
-  parallelfinance/parallel:v1.0.0 \
+  parallelfinance/parallel:v1.7.2 \
     -d /data \
     --chain=$PARA_CHAIN \
     --parachain-id=$PARA_ID \
@@ -45,11 +54,13 @@ docker run --restart=always --name heiko-fullnode \
     --ws-external \
     --rpc-external \
     --rpc-cors all \
+    --ws-max-connections 4096 \
     --pruning archive \
     --wasm-execution=compiled \
-    --ws-max-connections 4096 \
     --execution=wasm \
+    --state-cache-size 1 \
     --listen-addr=/ip4/0.0.0.0/tcp/$PARA_P2P_PORT \
+    --name=$NODE_NAME \
     --prometheus-external \
   -- \
     --chain=$RELAY_CHAIN \
@@ -58,11 +69,13 @@ docker run --restart=always --name heiko-fullnode \
     --ws-external \
     --rpc-external \
     --rpc-cors all \
+    --ws-max-connections 4096 \
     --wasm-execution=compiled \
     --execution=wasm \
     --database=RocksDb \
     --unsafe-pruning \
     --pruning=1000 \
-    --listen-addr=/ip4/0.0.0.0/tcp/$RELAY_P2P_PORT
+    --listen-addr=/ip4/0.0.0.0/tcp/$RELAY_P2P_PORT \
+    --name="${NODE_NAME}_Embedded_Relay"
 
-# docker logs -f heiko-fullnode
+# docker logs -f $PARA_CHAIN-fullnode

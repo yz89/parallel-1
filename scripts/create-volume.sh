@@ -4,22 +4,25 @@ DIR=$(cd -P -- "$(dirname -- "$0")" && pwd -P)
 
 cd $DIR
 
-# curl -fLO https://ksm-rocksdb.polkashots.io/kusama-9217113.RocksDb.7z
-# wget https://ksm-rocksdb.polkashots.io/kusama-9217113.RocksDb.7z
-# sudo apt install p7zip-full
-# 7z x kusama-9217113.RocksDb.7z
-
 set -xe
 
+# https://dot-rocksdb.polkashots.io
+# https://ksm-rocksdb.polkashots.io
+
 DB_PATH="polkadot/chains/ksmcc3"
-SNAPSHOT_PATH="db"
+SNAPSHOT_PATH="db/full"
 VOLUME="chains"
+
+if [ "$1" == "--polkadot" ]; then
+  DB_PATH="polkadot/chains/polkadot"
+fi
 
 # docker volume rm $VOLUME || true
 docker volume create $VOLUME || true
 
 mountpoint=$(docker volume inspect $VOLUME | jq '.[].Mountpoint' | tr -d '"')
-sudo mkdir -p $mountpoint/$DB_PATH
+sudo mkdir -p $mountpoint/$DB_PATH/db || true
+sudo rm -fr $mountpoint/$DB_PATH/db/full
 sudo mv $SNAPSHOT_PATH $mountpoint/$DB_PATH/db
 
 sudo chown -R $(id -un):$(id -gn) $mountpoint

@@ -78,16 +78,11 @@ fn loans_native_token_works() {
 
         // Redeem 1001 HKO should cause InsufficientDeposit
         assert_noop!(
-            Loans::redeem_allowed(HKO, &DAVE, dollar(50050), &MARKET_MOCK),
+            Loans::redeem_allowed(HKO, &DAVE, dollar(50050)),
             Error::<Test>::InsufficientDeposit
         );
         // Redeem 1000 HKO is ok
-        assert_ok!(Loans::redeem_allowed(
-            HKO,
-            &DAVE,
-            dollar(50000),
-            &MARKET_MOCK
-        ));
+        assert_ok!(Loans::redeem_allowed(HKO, &DAVE, dollar(50000),));
 
         assert_ok!(Loans::collateral_asset(Origin::signed(DAVE), HKO, true));
 
@@ -135,12 +130,12 @@ fn mint_works() {
 #[test]
 fn mint_must_return_err_when_overflows_occur() {
     new_test_ext().execute_with(|| {
-        Loans::update_market(
+        Loans::force_update_market(
             Origin::root(),
             DOT,
             Market {
                 cap: u128::MAX,
-                ..MARKET_MOCK
+                ..ACTIVE_MARKET_MOCK
             },
         )
         .unwrap();
@@ -187,27 +182,27 @@ fn redeem_allowed_works() {
         assert_ok!(Loans::mint(Origin::signed(ALICE), KSM, 200));
         // Redeem 201 KSM should cause InsufficientDeposit
         assert_noop!(
-            Loans::redeem_allowed(KSM, &ALICE, 10050, &MARKET_MOCK),
+            Loans::redeem_allowed(KSM, &ALICE, 10050),
             Error::<Test>::InsufficientDeposit
         );
         // Redeem 1 DOT should cause InsufficientDeposit
         assert_noop!(
-            Loans::redeem_allowed(DOT, &ALICE, 50, &MARKET_MOCK),
+            Loans::redeem_allowed(DOT, &ALICE, 50),
             Error::<Test>::InsufficientDeposit
         );
         // Redeem 200 KSM is ok
-        assert_ok!(Loans::redeem_allowed(KSM, &ALICE, 10000, &MARKET_MOCK));
+        assert_ok!(Loans::redeem_allowed(KSM, &ALICE, 10000));
 
         assert_ok!(Loans::collateral_asset(Origin::signed(ALICE), KSM, true));
         // Borrow 50 DOT will reduce 100 KSM liquidity for collateral_factor is 50%
         assert_ok!(Loans::borrow(Origin::signed(ALICE), DOT, 50));
         // Redeem 101 KSM should cause InsufficientLiquidity
         assert_noop!(
-            Loans::redeem_allowed(KSM, &ALICE, 5050, &MARKET_MOCK),
+            Loans::redeem_allowed(KSM, &ALICE, 5050),
             Error::<Test>::InsufficientLiquidity
         );
         // Redeem 100 KSM is ok
-        assert_ok!(Loans::redeem_allowed(KSM, &ALICE, 5000, &MARKET_MOCK));
+        assert_ok!(Loans::redeem_allowed(KSM, &ALICE, 5000));
     })
 }
 
@@ -269,6 +264,7 @@ fn redeem_all_works() {
 fn borrow_allowed_works() {
     new_test_ext().execute_with(|| {
         // Deposit 200 DOT as collateral
+        assert_ok!(Loans::mint(Origin::signed(BOB), DOT, 200));
         assert_ok!(Loans::mint(Origin::signed(ALICE), KSM, 200));
         assert_ok!(Loans::collateral_asset(Origin::signed(ALICE), KSM, true));
         // Borrow 101 DOT should cause InsufficientLiquidity
@@ -660,4 +656,23 @@ fn get_price_works() {
         Loans::get_price(DOT).unwrap(),
         Price::saturating_from_integer(2)
     );
+}
+
+#[test]
+fn ensure_enough_cash_works() {
+    new_test_ext().execute_with(|| {
+        assert_ok!(Assets::mint(
+            Origin::signed(ALICE),
+            KSM,
+            Loans::account_id(),
+            dollar(1000)
+        ));
+        assert_ok!(Loans::ensure_enough_cash(KSM, dollar(1000)));
+        TotalReserves::<Test>::insert(KSM, dollar(10));
+        assert_noop!(
+            Loans::ensure_enough_cash(KSM, dollar(1000)),
+            Error::<Test>::InsufficientCash,
+        );
+        assert_ok!(Loans::ensure_enough_cash(KSM, dollar(990)));
+    })
 }
