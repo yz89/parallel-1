@@ -38,15 +38,23 @@ check-wasm:
 
 .PHONY: test
 test:
-	SKIP_WASM_BUILD= cargo test --workspace --features runtime-benchmarks --exclude parallel --exclude parallel-runtime --exclude vanilla-runtime --exclude heiko-runtime -- --nocapture
+	SKIP_WASM_BUILD= cargo test --workspace --features runtime-benchmarks --exclude parallel --exclude parallel-runtime --exclude vanilla-runtime --exclude heiko-runtime --exclude pallet-loans-rpc --exclude pallet-loans-rpc-runtime-api --exclude parallel-primitives -- --nocapture
 
 .PHONY: bench
-bench: bench-loans bench-liquid-staking bench-amm bench-amm-router
+bench: bench-loans bench-liquid-staking bench-amm bench-amm-router bench-crowdloans
 	./scripts/benchmark.sh
 
 .PHONY: bench-loans
 bench-loans:
 	cargo run --release --features runtime-benchmarks -- benchmark --chain=$(CHAIN) --execution=wasm --wasm-execution=compiled --pallet=pallet-loans --extrinsic='*' --steps=50 --repeat=20 --heap-pages=4096 --template=./.maintain/frame-weight-template.hbs --output=./pallets/loans/src/weights.rs
+
+.PHONY: bench-crowdloans
+bench-crowdloans:
+	cargo run --release --features runtime-benchmarks -- benchmark --chain=$(CHAIN) --execution=wasm --wasm-execution=compiled --pallet=pallet-crowdloans --extrinsic='*' --steps=50 --repeat=20 --heap-pages=4096 --template=./.maintain/frame-weight-template.hbs --output=./pallets/crowdloans/src/weights.rs
+
+.PHONY: bench-bridge
+bench-bridge:
+	cargo run --release --features runtime-benchmarks -- benchmark --chain=$(CHAIN) --execution=wasm --wasm-execution=compiled --pallet=pallet-bridge --extrinsic='*' --steps=50 --repeat=20 --heap-pages=4096 --template=./.maintain/frame-weight-template.hbs --output=./pallets/bridge/src/weights.rs
 
 .PHONY: bench-amm
 bench-amm:
@@ -63,7 +71,7 @@ bench-amm-router:
 .PHONY: lint
 lint:
 	SKIP_WASM_BUILD= cargo fmt --all -- --check
-	SKIP_WASM_BUILD= cargo clippy --workspace --features runtime-benchmarks --exclude parallel -- -D dead_code -A clippy::derivable_impls -A clippy::unnecessary_cast -A clippy::unnecessary_mut_passed -A clippy::too_many_arguments -A clippy::type_complexity -A clippy::identity_op -D warnings
+	SKIP_WASM_BUILD= cargo clippy --workspace --features runtime-benchmarks --exclude parallel -- -D dead_code -A clippy::derivable_impls -A clippy::explicit_counter_loop -A clippy::unnecessary_cast -A clippy::unnecessary_mut_passed -A clippy::too_many_arguments -A clippy::type_complexity -A clippy::identity_op -D warnings
 
 .PHONY: fix
 fix:
@@ -93,7 +101,7 @@ launch: shutdown
 	docker image pull parallelfinance/nominate-client:latest
 	docker image pull parallelfinance/oracle-client:latest
 	docker image pull parallelfinance/parallel-dapp:latest
-	parachain-launch generate $(LAUNCH_CONFIG) && (cp -r keystore* output || true) && cp docker-compose.override.yml output && cd output && docker-compose up -d --build
+	DOCKER_CLIENT_TIMEOUT=120 COMPOSE_HTTP_TIMEOUT=120 parachain-launch generate $(LAUNCH_CONFIG) && (cp -r keystore* output || true) && cp docker-compose.override.yml output && cd output && docker-compose up -d --build
 	cd launch && yarn start
 
 .PHONY: logs

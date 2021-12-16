@@ -56,7 +56,6 @@ pub trait WeightInfo {
     fn unbond() -> Weight;
     fn rebond() -> Weight;
     fn withdraw_unbonded() -> Weight;
-    fn record_staking_settlement() -> Weight;
     fn set_liquid_currency() -> Weight;
     fn set_staking_currency() -> Weight;
     fn update_reserve_factor() -> Weight;
@@ -116,11 +115,6 @@ impl<T: frame_system::Config> WeightInfo for SubstrateWeight<T> {
             .saturating_add(T::DbWeight::get().reads(12 as Weight))
             .saturating_add(T::DbWeight::get().writes(5 as Weight))
     }
-    fn record_staking_settlement() -> Weight {
-        (54_000_000 as Weight)
-            .saturating_add(T::DbWeight::get().reads(3 as Weight))
-            .saturating_add(T::DbWeight::get().writes(2 as Weight))
-    }
     fn set_liquid_currency() -> Weight {
         (5_000_000 as Weight).saturating_add(T::DbWeight::get().writes(1 as Weight))
     }
@@ -158,9 +152,9 @@ impl<T: frame_system::Config> WeightInfo for SubstrateWeight<T> {
             .saturating_add(T::DbWeight::get().writes(6 as Weight))
     }
     fn on_idle() -> Weight {
-        (263_000_000 as Weight)
-            .saturating_add(T::DbWeight::get().reads(9 as Weight))
-            .saturating_add(T::DbWeight::get().writes(7 as Weight))
+        (131_000_000 as Weight)
+            .saturating_add(T::DbWeight::get().reads(7 as Weight))
+            .saturating_add(T::DbWeight::get().writes(5 as Weight))
     }
 }
 
@@ -211,11 +205,6 @@ impl WeightInfo for () {
             .saturating_add(RocksDbWeight::get().reads(12 as Weight))
             .saturating_add(RocksDbWeight::get().writes(5 as Weight))
     }
-    fn record_staking_settlement() -> Weight {
-        (54_000_000 as Weight)
-            .saturating_add(RocksDbWeight::get().reads(3 as Weight))
-            .saturating_add(RocksDbWeight::get().writes(2 as Weight))
-    }
     fn set_liquid_currency() -> Weight {
         (5_000_000 as Weight).saturating_add(RocksDbWeight::get().writes(1 as Weight))
     }
@@ -253,8 +242,8 @@ impl WeightInfo for () {
             .saturating_add(RocksDbWeight::get().writes(6 as Weight))
     }
     fn on_idle() -> Weight {
-        (263_000_000 as Weight)
-            .saturating_add(RocksDbWeight::get().reads(9 as Weight))
-            .saturating_add(RocksDbWeight::get().writes(7 as Weight))
+        (131_000_000 as Weight)
+            .saturating_add(RocksDbWeight::get().reads(7 as Weight))
+            .saturating_add(RocksDbWeight::get().writes(5 as Weight))
     }
 }

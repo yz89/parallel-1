@@ -36,7 +36,7 @@ use frame_support::{
 };
 use frame_system::{
     limits::{BlockLength, BlockWeights},
-    EnsureOneOf, EnsureRoot,
+    EnsureOneOf, EnsureRoot, EnsureSigned,
 };
 
 use orml_traits::{DataProvider, DataProviderExtended};
@@ -88,6 +88,7 @@ pub use impls::DealWithFees;
 pub use pallet_liquid_staking;
 // pub use pallet_liquidation;
 pub use pallet_amm;
+pub use pallet_bridge;
 pub use pallet_crowdloans;
 pub use pallet_liquidity_mining;
 pub use pallet_loans;
@@ -135,16 +136,16 @@ pub const VERSION: RuntimeVersion = RuntimeVersion {
     spec_name: create_runtime_str!("vanilla"),
     impl_name: create_runtime_str!("vanilla"),
     authoring_version: 1,
-    spec_version: 172,
+    spec_version: 175,
     impl_version: 20,
     apis: RUNTIME_API_VERSIONS,
-    transaction_version: 2,
+    transaction_version: 4,
 };
 
 // 1 in 4 blocks (on average, not counting collisions) will be primary babe blocks.
 pub const PRIMARY_PROBABILITY: (u64, u64) = (1, 4);
 
-pub const NATIVE_ASSET_ID: u32 = tokens::HKO;
+pub const NATIVE_ASSET_ID: u32 = HKO;
 
 #[derive(codec::Encode, codec::Decode)]
 pub enum XCMPMessage<XAccountId, XBalance> {
@@ -201,12 +202,9 @@ impl Contains<Call> for BaseCallFilter {
     fn contains(call: &Call) -> bool {
         matches!(
             call,
-            // System, Utility, Currencies
+            // System, Currencies
             Call::System(_) |
             Call::Timestamp(_) |
-            Call::Multisig(_)  |
-            Call::Utility(_) |
-            Call::Proxy(_) |
             Call::Balances(_) |
             Call::Assets(pallet_assets::Call::mint { .. }) |
             Call::Assets(pallet_assets::Call::transfer { .. }) |
@@ -228,6 +226,10 @@ impl Contains<Call> for BaseCallFilter {
             Call::Authorship(_) |
             Call::CollatorSelection(_) |
             Call::Session(_) |
+            // Utility
+            Call::Multisig(_)  |
+            Call::Utility(_) |
+            Call::Proxy(_) |
             // 3rd Party
             Call::Oracle(_) |
             Call::XTokens(_) |
@@ -244,18 +246,30 @@ impl Contains<Call> for BaseCallFilter {
             Call::GeneralCouncilMembership(_) |
             Call::TechnicalCommitteeMembership(_) |
             Call::OracleMembership(_) |
+            Call::BridgeMembership(_) |
             Call::ValidatorFeedersMembership(_) |
             // AMM
             Call::AMM(_) |
             // Crowdloans
-            Call::Crowdloans(_)
+            Call::Crowdloans(_) |
+            // Bridge
+            Call::Bridge(_) |
+            // Liquidity Mining
+            Call::LiquidityMining(_)
         )
+    }
+}
+
+pub struct CallFilterRouter;
+impl Contains<Call> for CallFilterRouter {
+    fn contains(call: &Call) -> bool {
+        BaseCallFilter::contains(call) && EmergencyShutdown::contains(call)
     }
 }
 
 impl frame_system::Config for Runtime {
     /// The basic call filter to use in dispatchable.
-    type BaseCallFilter = BaseCallFilter;
+    type BaseCallFilter = CallFilterRouter;
     /// Block & extrinsics weights: base values and limits.
     type BlockWeights = RuntimeBlockWeights;
     /// The maximum length of a block (in bytes).
@@ -458,8 +472,6 @@ parameter_types! {
     pub const StakingPalletId: PalletId = PalletId(*b"par/lqsk");
     pub const DerivativeIndex: u16 = 0;
     pub const UnstakeQueueCapacity: u32 = 1000;
-    pub const MaxRewardsPerEra: Balance = 10_000_000_000_000_000;
-    pub const MaxSlashesPerEra: Balance = 1_000_000_000_000_000;
     pub const MinStakeAmount: Balance = 1_000_000_000_000;
     pub const MinUnstakeAmount: Balance = 500_000_000_000;
 }
@@ -476,8 +488,6 @@ impl pallet_liquid_staking::Config for Runtime {
     type DerivativeIndex = DerivativeIndex;
     type AccountIdToMultiLocation = AccountIdToMultiLocation;
     type UnstakeQueueCapacity = UnstakeQueueCapacity;
-    type MaxRewardsPerEra = MaxRewardsPerEra;
-    type MaxSlashesPerEra = MaxSlashesPerEra;
     type RelayNetwork = RelayNetwork;
     type MinStakeAmount = MinStakeAmount;
     type MinUnstakeAmount = MinUnstakeAmount;
@@ -848,6 +858,27 @@ pub type LocationToAccountId = (
     AccountId32Aliases<RelayNetwork, AccountId>,
 );
 
+parameter_types! {
+    pub const NativeCurrencyId: CurrencyId = NATIVE_ASSET_ID;
+    pub GiftAccount: AccountId = PalletId(*b"par/gift").into_account();
+}
+
+pub struct GiftConvert;
+impl Convert<Balance, Balance> for GiftConvert {
+    fn convert(amount: Balance) -> Balance {
+        let decimal = <Assets as InspectMetadata<AccountId>>::decimals(&KSM);
+        if decimal.is_zero() {
+            return Zero::zero();
+        }
+
+        if amount >= 10_u128.pow((decimal - 1).into()) {
+            return DOLLARS / 40;
+        }
+
+        Zero::zero()
+    }
+}
+
 /// Means for transacting assets on this chain.
 pub type LocalAssetTransactor = MultiCurrencyAdapter<
     // Use this currency:
@@ -856,9 +887,13 @@ pub type LocalAssetTransactor = MultiCurrencyAdapter<
     IsNativeConcrete<CurrencyId, CurrencyIdConvert>,
     // Our chain's account ID type (we can't get away without mentioning it explicitly):
     AccountId,
+    Balance,
     // Do a simple punn to convert an AccountId32 MultiLocation into a native chain account ID:
     LocationToAccountId,
     CurrencyIdConvert,
+    NativeCurrencyId,
+    GiftAccount,
+    GiftConvert,
 >;
 
 /// This is the type we use to convert an (incoming) XCM origin into a local `Origin` instance,
@@ -962,7 +997,7 @@ parameter_types! {
       pub const MinimumCount: u32 = 1;
       pub const ExpiresIn: Moment = 1000 * 60 * 60; // 60 mins
       pub const MaxHasDispatchedSize: u32 = 100;
-      pub ZeroAccountId: AccountId = AccountId::from([0u8; 32]);
+      pub RootOperator: AccountId = AccountId::from([1u8; 32]);
 }
 
 type ParallelDataProvider = orml_oracle::Instance1;
@@ -974,7 +1009,7 @@ impl orml_oracle::Config<ParallelDataProvider> for Runtime {
     type Time = Timestamp;
     type OracleKey = CurrencyId;
     type OracleValue = Price;
-    type RootOperatorAccountId = ZeroAccountId;
+    type RootOperatorAccountId = RootOperator;
     type MaxHasDispatchedSize = MaxHasDispatchedSize;
     type WeightInfo = ();
     type Members = OracleMembership;
@@ -1249,32 +1284,54 @@ impl pallet_membership::Config<OracleMembershipInstance> for Runtime {
 }
 
 parameter_types! {
+    pub const BridgeMaxMembers: u32 = 100;
+}
+
+type BridgeMembershipInstance = pallet_membership::Instance6;
+impl pallet_membership::Config<BridgeMembershipInstance> for Runtime {
+    type Event = Event;
+    type AddOrigin = EnsureRootOrMoreThanHalfGeneralCouncil;
+    type RemoveOrigin = EnsureRootOrMoreThanHalfGeneralCouncil;
+    type SwapOrigin = EnsureRootOrMoreThanHalfGeneralCouncil;
+    type ResetOrigin = EnsureRootOrMoreThanHalfGeneralCouncil;
+    type PrimeOrigin = EnsureRootOrMoreThanHalfGeneralCouncil;
+    type MembershipInitialized = ();
+    type MembershipChanged = ();
+    type MaxMembers = BridgeMaxMembers;
+    type WeightInfo = weights::pallet_membership::WeightInfo<Runtime>;
+}
+
+parameter_types! {
     pub MinVestedTransfer: Balance = 0;
     pub const MaxVestingSchedules: u32 = 100;
 }
 
-pub struct RelaychainBlockNumberProvider<T>(sp_std::marker::PhantomData<T>);
+parameter_types! {
+    pub const ParallelHeiko: ChainId = 0;
+    pub const BridgePalletId: PalletId = PalletId(*b"par/brid");
+    // Set a short lifetime for development
+    pub const ProposalLifetime: BlockNumber = 200;
+}
 
-impl<T: cumulus_pallet_parachain_system::Config> BlockNumberProvider
-    for RelaychainBlockNumberProvider<T>
-{
-    type BlockNumber = BlockNumber;
-
-    fn current_block_number() -> Self::BlockNumber {
-        cumulus_pallet_parachain_system::Pallet::<T>::validation_data()
-            .map(|d| d.relay_parent_number)
-            .unwrap_or_default()
-    }
+impl pallet_bridge::Config for Runtime {
+    type Event = Event;
+    type AdminMembers = BridgeMembership;
+    type RootOperatorOrigin = EnsureRootOrMoreThanHalfGeneralCouncil;
+    type ChainId = ParallelHeiko;
+    type PalletId = BridgePalletId;
+    type Assets = CurrencyAdapter;
+    type ProposalLifetime = ProposalLifetime;
+    type WeightInfo = pallet_bridge::weights::SubstrateWeight<Runtime>;
 }
 
 impl orml_vesting::Config for Runtime {
     type Event = Event;
     type Currency = Balances;
     type MinVestedTransfer = MinVestedTransfer;
-    type VestedTransferOrigin = frame_system::EnsureSigned<AccountId>;
+    type VestedTransferOrigin = EnsureSigned<AccountId>;
     type WeightInfo = ();
     type MaxVestingSchedules = MaxVestingSchedules;
-    type BlockNumberProvider = RelaychainBlockNumberProvider<Runtime>;
+    type BlockNumberProvider = frame_system::Pallet<Runtime>;
 }
 
 parameter_types! {
@@ -1297,31 +1354,65 @@ impl pallet_amm::Config for Runtime {
 
 parameter_types! {
     pub const CrowdloansPalletId: PalletId = PalletId(*b"crwloans");
-    pub const MaxReserves: Balance = 1_000_000_000_000;
-    pub const PariticipationPeriod: BlockNumber = 10;
+    pub const MinContribution: Balance = 110_000_000_000;
+    pub const MaxVrfs: u32 = 10;
+    pub const MigrateKeysLimit: u32 = 10;
+    pub RefundLocation: AccountId = Utility::derivative_account_id(ParachainInfo::parachain_id().into_account(), u16::MAX);
+}
+
+pub struct RelayChainBlockNumberProvider<T>(sp_std::marker::PhantomData<T>);
+
+impl<T: cumulus_pallet_parachain_system::Config> BlockNumberProvider
+    for RelayChainBlockNumberProvider<T>
+{
+    type BlockNumber = primitives::BlockNumber;
+
+    fn current_block_number() -> Self::BlockNumber {
+        cumulus_pallet_parachain_system::Pallet::<T>::validation_data()
+            .map(|d| d.relay_parent_number)
+            .unwrap_or_default()
+    }
 }
 
 impl pallet_crowdloans::Config for Runtime {
     type Event = Event;
+    type Origin = Origin;
+    type Call = Call;
     type PalletId = CrowdloansPalletId;
     type SelfParaId = ParachainInfo;
-    type XcmSender = XcmRouter;
     type Assets = Assets;
-    type RelayNetwork = RelayNetwork;
     type RelayCurrency = RelayCurrency;
     type AccountIdToMultiLocation = AccountIdToMultiLocation;
+    type RefundLocation = RefundLocation;
+    type MinContribution = MinContribution;
+    type MaxVrfs = MaxVrfs;
+    type MigrateKeysLimit = MigrateKeysLimit;
     type UpdateOrigin = EnsureRootOrMoreThanHalfGeneralCouncil;
+    type MigrateOrigin = EnsureRootOrMoreThanHalfGeneralCouncil;
+    type VrfOrigin = EnsureRootOrMoreThanHalfGeneralCouncil;
     type CreateVaultOrigin = EnsureRootOrMoreThanHalfGeneralCouncil;
-    type PariticipateOrigin = EnsureRootOrMoreThanHalfGeneralCouncil;
-    type CloseOrigin = EnsureRootOrMoreThanHalfGeneralCouncil;
+    type UpdateVaultOrigin = EnsureRootOrMoreThanHalfGeneralCouncil;
+    type OpenCloseOrigin = EnsureRootOrMoreThanHalfGeneralCouncil;
     type AuctionFailedOrigin = EnsureRootOrMoreThanHalfGeneralCouncil;
-    type AuctionCompletedOrigin = EnsureRootOrMoreThanHalfGeneralCouncil;
     type SlotExpiredOrigin = EnsureRootOrMoreThanHalfGeneralCouncil;
-    type MaxReserves = MaxReserves;
-    type PariticipationPeriod = PariticipationPeriod;
     type WeightInfo = pallet_crowdloans::weights::SubstrateWeight<Runtime>;
+    type XCM = XcmHelper;
+    type RelayChainBlockNumberProvider = RelayChainBlockNumberProvider<Runtime>;
 }
 
+parameter_types! {
+    pub const XcmHelperPalletId: PalletId = PalletId(*b"par/fees");
+    pub const NotifyTimeout: BlockNumber = 100;
+}
+
+impl pallet_xcm_helper::Config for Runtime {
+    type Assets = Assets;
+    type XcmSender = XcmRouter;
+    type RelayNetwork = RelayNetwork;
+    type PalletId = XcmHelperPalletId;
+    type NotifyTimeout = NotifyTimeout;
+    type BlockNumberProvider = frame_system::Pallet<Runtime>;
+}
 parameter_types! {
     pub const MaxLengthRoute: u8 = 10;
     pub const RouterPalletId: PalletId = PalletId(*b"ammroute");
@@ -1334,10 +1425,6 @@ impl pallet_router::Config for Runtime {
     type AMMRouterWeightInfo = pallet_router::weights::SubstrateWeight<Runtime>;
     type MaxLengthRoute = MaxLengthRoute;
     type Assets = CurrencyAdapter;
-}
-
-parameter_types! {
-    pub const NativeCurrencyId: CurrencyId = NATIVE_ASSET_ID;
 }
 
 impl pallet_currency_adapter::Config for Runtime {
@@ -1358,6 +1445,78 @@ impl pallet_liquidity_mining::Config for Runtime {
     type MaxRewardTokens = MaxRewardTokens;
     type CreateOrigin = EnsureRoot<AccountId>;
     type WeightInfo = pallet_liquidity_mining::weights::SubstrateWeight<Runtime>;
+}
+
+pub struct WhiteListFilter;
+impl Contains<Call> for WhiteListFilter {
+    fn contains(call: &Call) -> bool {
+        matches!(
+            call,
+            // System, Currencies
+            Call::System(_) |
+            Call::Timestamp(_) |
+            Call::Balances(_) |
+            Call::Assets(pallet_assets::Call::mint { .. }) |
+            Call::Assets(pallet_assets::Call::transfer { .. }) |
+            Call::Assets(pallet_assets::Call::burn { .. }) |
+            // Governance
+            Call::Sudo(_) |
+            Call::Democracy(_) |
+            Call::GeneralCouncil(_) |
+            Call::TechnicalCommittee(_) |
+            Call::Treasury(_) |
+            Call::Scheduler(_) |
+            // Parachain
+            Call::ParachainSystem(_) |
+            Call::XcmpQueue(_) |
+            Call::DmpQueue(_) |
+            Call::PolkadotXcm(_) |
+            Call::CumulusXcm(_) |
+            // Consensus
+            Call::Authorship(_) |
+            Call::CollatorSelection(_) |
+            Call::Session(_) |
+            // Utility
+            Call::Multisig(_)  |
+            Call::Utility(_) |
+            Call::Proxy(_) |
+            // 3rd Party
+            Call::Oracle(_) |
+            Call::XTokens(_) |
+            Call::OrmlXcm(_) |
+            Call::Vesting(_) |
+            // Loans
+            // Call::Loans(_) |
+            // Call::Liquidation(_) |
+            Call::Prices(_) |
+            // LiquidStaking
+            // Call::LiquidStaking(_) |
+            Call::NomineeElection(_) |
+            // Membership
+            Call::GeneralCouncilMembership(_) |
+            Call::TechnicalCommitteeMembership(_) |
+            Call::OracleMembership(_) |
+            Call::BridgeMembership(_) |
+            Call::ValidatorFeedersMembership(_)
+        )
+        // // AMM
+        // Call::AMM(_) |
+        //
+        // // Crowdloans
+        // Call::Crowdloans(_) |
+        //
+        // // Bridge
+        // Call::Bridge(_) |
+        //
+        // // Liquidity Mining
+        // Call::LiquidityMining(_)
+    }
+}
+
+impl pallet_emergency_shutdown::Config for Runtime {
+    type Event = Event;
+    type Whitelist = WhiteListFilter;
+    type ShutdownOrigin = EnsureRootOrMoreThanHalfGeneralCouncil;
 }
 
 // Create the runtime by composing the FRAME pallets that were previously configured.
@@ -1409,7 +1568,7 @@ construct_runtime!(
         // Loans
         Loans: pallet_loans::{Pallet, Call, Storage, Event<T>} = 50,
         Prices: pallet_prices::{Pallet, Storage, Call, Event<T>} = 51,
-        Crowdloans: pallet_crowdloans::{Pallet, Call, Storage, Config, Event<T>} = 52,
+        Crowdloans: pallet_crowdloans::{Pallet, Call, Storage, Event<T>} = 52,
 
         // LiquidStaking
         LiquidStaking: pallet_liquid_staking::{Pallet, Call, Storage, Event<T>, Config} = 60,
@@ -1419,15 +1578,19 @@ construct_runtime!(
         GeneralCouncilMembership: pallet_membership::<Instance1>::{Pallet, Call, Storage, Event<T>, Config<T>} = 70,
         TechnicalCommitteeMembership: pallet_membership::<Instance2>::{Pallet, Call, Storage, Event<T>, Config<T>} = 71,
         OracleMembership: pallet_membership::<Instance3>::{Pallet, Call, Storage, Event<T>, Config<T>} = 72,
-        ValidatorFeedersMembership: pallet_membership::<Instance5>::{Pallet, Call, Storage, Event<T>, Config<T>} = 74,
+        ValidatorFeedersMembership: pallet_membership::<Instance5>::{Pallet, Call, Storage, Event<T>, Config<T>} = 73,
+        BridgeMembership: pallet_membership::<Instance6>::{Pallet, Call, Storage, Event<T>, Config<T>} = 74,
 
         // AMM
         AMM: pallet_amm::{Pallet, Call, Storage, Event<T>} = 80,
         AMMRoute: pallet_router::{Pallet, Call, Event<T>} = 81,
         CurrencyAdapter: pallet_currency_adapter::{Pallet, Call} = 82,
 
-        // LiquidityMining
-        LiquidityMining: pallet_liquidity_mining::{Pallet, Call, Storage, Event<T>} = 83,
+        // Others
+        Bridge: pallet_bridge::{Pallet, Call, Storage, Event<T>} = 90,
+        EmergencyShutdown: pallet_emergency_shutdown::{Pallet, Call, Event<T>} = 91,
+        LiquidityMining: pallet_liquidity_mining::{Pallet, Call, Storage, Event<T>} = 92,
+        XcmHelper: pallet_xcm_helper::{Pallet} = 93,
     }
 );
 
@@ -1618,8 +1781,8 @@ impl_runtime_apis! {
 
             list_benchmark!(list, extra, pallet_balances, Balances);
             list_benchmark!(list, extra, pallet_membership, TechnicalCommitteeMembership);
-            // list_benchmark!(list, extra, pallet_liquid_staking, LiquidStaking);
             list_benchmark!(list, extra, pallet_multisig, Multisig);
+            list_benchmark!(list, extra, pallet_bridge, Bridge);
             list_benchmark!(list, extra, pallet_loans, Loans);
             list_benchmark!(list, extra, frame_system, SystemBench::<Runtime>);
             list_benchmark!(list, extra, pallet_timestamp, Timestamp);
@@ -1664,6 +1827,7 @@ impl_runtime_apis! {
             add_benchmark!(params, batches, frame_system, SystemBench::<Runtime>);
             add_benchmark!(params, batches, pallet_balances, Balances);
             add_benchmark!(params, batches, pallet_timestamp, Timestamp);
+            add_benchmark!(params, batches, pallet_bridge, Bridge);
             add_benchmark!(params, batches, pallet_loans, Loans);
             add_benchmark!(params, batches, pallet_multisig, Multisig);
             add_benchmark!(params, batches, pallet_membership, TechnicalCommitteeMembership);

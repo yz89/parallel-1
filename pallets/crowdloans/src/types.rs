@@ -14,23 +14,21 @@
 
 // Groups common pool related structures
 
-use super::{AssetIdOf, BalanceOf, Config, Error, Event, Pallet as Crowdloans};
+use super::{AccountIdOf, AssetIdOf, BalanceOf, Config};
 
 use codec::{Decode, Encode};
-use frame_support::{
-    require_transactional,
-    traits::{fungibles::Mutate, Get},
-};
-use scale_info::TypeInfo;
-use sp_runtime::{traits::Zero, DispatchError, DispatchResult, RuntimeDebug};
-use xcm::latest::prelude::*;
 
-use primitives::{ump::*, ParaId};
+use scale_info::TypeInfo;
+use sp_runtime::{traits::Zero, RuntimeDebug};
+
+use primitives::{BlockNumber, ParaId, TrieIndex};
 
 #[derive(PartialEq, Eq, Copy, Clone, Encode, Decode, RuntimeDebug, TypeInfo)]
 pub enum VaultPhase {
+    /// Vault is open for contributions but wont execute contribute call on relaychain
+    Pending,
     /// Vault is open for contributions
-    CollectingContributions,
+    Contributing,
     /// The vault is closed and we should avoid future contributions. This happens when
     /// - there are no contribution
     /// - user cancelled
@@ -48,25 +46,47 @@ pub enum VaultPhase {
 #[derive(PartialEq, Eq, Copy, Clone, Encode, Decode, RuntimeDebug, TypeInfo)]
 #[scale_info(skip_type_params(T))]
 pub struct Vault<T: Config> {
+    /// Vault ID
+    pub id: u32,
     /// Asset used to represent the shares of currency
     /// to be claimed back later on
     pub ctoken: AssetIdOf<T>,
     /// Which phase the vault is at
     pub phase: VaultPhase,
-    /// How we contribute coins to the crowdloan
-    pub contribution_strategy: ContributionStrategy,
     /// Tracks how many coins were contributed on the relay chain
     pub contributed: BalanceOf<T>,
+    /// Tracks how many coins were gathered but not contributed on the relay chain
+    pub pending: BalanceOf<T>,
+    /// How we contribute coins to the crowdloan
+    pub contribution_strategy: ContributionStrategy,
+    /// parallel enforced limit
+    pub cap: BalanceOf<T>,
+    /// block that vault ends
+    pub end_block: BlockNumber,
+    /// child storage trie index where we store all contributions
+    pub trie_index: TrieIndex,
 }
 
 /// init default vault with ctoken and currency override
-impl<T: Config> From<(AssetIdOf<T>, ContributionStrategy)> for Vault<T> {
-    fn from((ctoken, contribution_strategy): (AssetIdOf<T>, ContributionStrategy)) -> Self {
+impl<T: Config> Vault<T> {
+    pub fn new(
+        id: u32,
+        ctoken: AssetIdOf<T>,
+        contribution_strategy: ContributionStrategy,
+        cap: BalanceOf<T>,
+        end_block: BlockNumber,
+        trie_index: TrieIndex,
+    ) -> Self {
         Self {
+            id,
             ctoken,
-            contribution_strategy,
-            phase: VaultPhase::CollectingContributions,
+            phase: VaultPhase::Pending,
             contributed: Zero::zero(),
+            pending: Zero::zero(),
+            contribution_strategy,
+            cap,
+            end_block,
+            trie_index,
         }
     }
 }
@@ -74,104 +94,19 @@ impl<T: Config> From<(AssetIdOf<T>, ContributionStrategy)> for Vault<T> {
 #[derive(PartialEq, Eq, Copy, Clone, Encode, Decode, RuntimeDebug, TypeInfo)]
 pub enum ContributionStrategy {
     XCM,
-    XCMWithProxy,
 }
 
-pub trait ContributionStrategyExecutor {
-    /// Execute the strategy to contribute `amount` of coins to the crowdloan
-    /// of the given parachain id
-    fn contribute<T: Config>(self, para_id: ParaId, amount: BalanceOf<T>) -> DispatchResult;
-
-    /// Withdraw coins from the relay chain's crowdloans and send it back
-    /// to our parachain
-    fn withdraw<T: Config>(self, para_id: ParaId, amount: BalanceOf<T>) -> DispatchResult;
-}
-
-impl ContributionStrategyExecutor for ContributionStrategy {
-    #[require_transactional]
-    fn contribute<T: Config>(
-        self,
-        para_id: ParaId,
+#[derive(PartialEq, Eq, Clone, Encode, Decode, RuntimeDebug, TypeInfo)]
+#[scale_info(skip_type_params(T))]
+pub enum XcmInflightRequest<T: Config> {
+    Contribute {
+        crowdloan: ParaId,
+        who: AccountIdOf<T>,
         amount: BalanceOf<T>,
-    ) -> Result<(), DispatchError> {
-        if self == ContributionStrategy::XCMWithProxy {
-            unimplemented!()
-        }
-
-        T::Assets::burn_from(
-            T::RelayCurrency::get(),
-            &Crowdloans::<T>::account_id(),
-            amount,
-        )?;
-
-        switch_relay!({
-            let call = RelaychainCall::<T>::Crowdloans(CrowdloansCall::Contribute(
-                CrowdloansContributeCall {
-                    index: para_id,
-                    value: amount,
-                    signature: None,
-                },
-            ));
-
-            let msg = Crowdloans::<T>::ump_transact(
-                call.encode().into(),
-                Crowdloans::<T>::xcm_weight().contribute_weight,
-            )?;
-
-            match T::XcmSender::send_xcm(MultiLocation::parent(), msg) {
-                Ok(()) => {
-                    Crowdloans::<T>::deposit_event(Event::<T>::Contributing(para_id, amount, None));
-                }
-                Err(_e) => {
-                    return Err(Error::<T>::SendXcmError.into());
-                }
-            }
-        });
-
-        Ok(())
-    }
-
-    #[require_transactional]
-    fn withdraw<T: Config>(
-        self,
-        para_id: ParaId,
+    },
+    Withdraw {
+        crowdloan: ParaId,
         amount: BalanceOf<T>,
-    ) -> Result<(), DispatchError> {
-        if self == ContributionStrategy::XCMWithProxy {
-            unimplemented!()
-        }
-
-        switch_relay!({
-            let call =
-                RelaychainCall::<T>::Crowdloans(CrowdloansCall::Withdraw(CrowdloansWithdrawCall {
-                    who: Crowdloans::<T>::para_account_id(),
-                    index: para_id,
-                }));
-
-            let msg = Crowdloans::<T>::ump_transact(
-                call.encode().into(),
-                Crowdloans::<T>::xcm_weight().withdraw_weight,
-            )?;
-
-            match T::XcmSender::send_xcm(MultiLocation::parent(), msg) {
-                Ok(()) => {
-                    Crowdloans::<T>::deposit_event(Event::<T>::Withdrawing(
-                        para_id,
-                        Crowdloans::<T>::para_account_id(),
-                    ));
-                }
-                Err(_e) => {
-                    return Err(Error::<T>::SendXcmError.into());
-                }
-            }
-        });
-
-        T::Assets::mint_into(
-            T::RelayCurrency::get(),
-            &Crowdloans::<T>::account_id(),
-            amount,
-        )?;
-
-        Ok(())
-    }
+        target_phase: VaultPhase,
+    },
 }

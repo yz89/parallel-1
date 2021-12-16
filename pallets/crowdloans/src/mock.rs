@@ -1,5 +1,3 @@
-use super::TotalReserves;
-
 use frame_support::{
     construct_runtime,
     dispatch::Weight,
@@ -16,7 +14,9 @@ use primitives::{currency::MultiCurrencyAdapter, tokens::*, Balance, ParaId};
 use sp_core::H256;
 use sp_runtime::{
     testing::Header,
-    traits::{AccountIdConversion, AccountIdLookup, BlakeTwo256, Convert},
+    traits::{
+        AccountIdConversion, AccountIdLookup, BlakeTwo256, BlockNumberProvider, Convert, Zero,
+    },
     AccountId32,
     MultiAddress::Id,
 };
@@ -35,6 +35,21 @@ use xcm_simulator::{decl_test_network, decl_test_parachain, decl_test_relay_chai
 pub type AccountId = AccountId32;
 pub type CurrencyId = u32;
 pub use kusama_runtime;
+
+pub struct RelayChainBlockNumberProvider<T>(sp_std::marker::PhantomData<T>);
+
+impl<T: cumulus_pallet_parachain_system::Config> BlockNumberProvider
+    for RelayChainBlockNumberProvider<T>
+{
+    type BlockNumber = primitives::BlockNumber;
+
+    fn current_block_number() -> Self::BlockNumber {
+        cumulus_pallet_parachain_system::Pallet::<T>::validation_data()
+            .map(|d| d.relay_parent_number)
+            .unwrap_or_default()
+            .into()
+    }
+}
 
 parameter_types! {
     pub const ReservedXcmpWeight: Weight = WEIGHT_PER_SECOND / 4;
@@ -80,12 +95,28 @@ parameter_types! {
     pub DotPerSecond: (AssetId, u128) = (AssetId::Concrete(MultiLocation::parent()), 1);
 }
 
+parameter_types! {
+    pub const NativeCurrencyId: CurrencyId = HKO;
+    pub GiftAccount: AccountId = PalletId(*b"par/gift").into_account();
+}
+
+pub struct GiftConvert;
+impl Convert<Balance, Balance> for GiftConvert {
+    fn convert(_amount: Balance) -> Balance {
+        return Zero::zero();
+    }
+}
+
 pub type LocalAssetTransactor = MultiCurrencyAdapter<
     Assets,
     IsNativeConcrete<CurrencyId, CurrencyIdConvert>,
     AccountId,
+    Balance,
     LocationToAccountId,
     CurrencyIdConvert,
+    NativeCurrencyId,
+    GiftAccount,
+    GiftConvert,
 >;
 
 pub type XcmRouter = ParachainXcmRouter<ParachainInfo>;
@@ -295,48 +326,69 @@ impl SortedMembers<AccountId> for BobOrigin {
 
 parameter_types! {
     pub const CrowdloansPalletId: PalletId = PalletId(*b"crwloans");
+    pub const MaxVrfs: u32 = 10;
+    pub const MinContribution: Balance = 0;
+    pub const MigrateKeysLimit: u32 = 10;
     pub SelfParaId: ParaId = para_a_id();
-    pub const MaxReserves: Balance = 100_000_000_000;
-    pub const PariticipationPeriod: BlockNumber = 10;
+    pub RefundLocation: AccountId = para_a_id().into_account();
 }
 
 pub type CreateVaultOrigin =
     EnsureOneOf<AccountId, EnsureRoot<AccountId>, EnsureSignedBy<AliceOrigin, AccountId>>;
 
-pub type PariticipateOrigin =
-    EnsureOneOf<AccountId, EnsureRoot<AccountId>, EnsureSignedBy<BobOrigin, AccountId>>;
+pub type UpdateVaultOrigin =
+    EnsureOneOf<AccountId, EnsureRoot<AccountId>, EnsureSignedBy<AliceOrigin, AccountId>>;
 
-pub type CloseOrigin =
+pub type VrfOrigin =
+    EnsureOneOf<AccountId, EnsureRoot<AccountId>, EnsureSignedBy<AliceOrigin, AccountId>>;
+
+pub type OpenCloseOrigin =
     EnsureOneOf<AccountId, EnsureRoot<AccountId>, EnsureSignedBy<AliceOrigin, AccountId>>;
 
 pub type AuctionFailedOrigin =
     EnsureOneOf<AccountId, EnsureRoot<AccountId>, EnsureSignedBy<BobOrigin, AccountId>>;
-
-pub type AuctionCompletedOrigin =
-    EnsureOneOf<AccountId, EnsureRoot<AccountId>, EnsureSignedBy<AliceOrigin, AccountId>>;
 
 pub type SlotExpiredOrigin =
     EnsureOneOf<AccountId, EnsureRoot<AccountId>, EnsureSignedBy<BobOrigin, AccountId>>;
 
 impl crate::Config for Test {
     type Event = Event;
+    type Origin = Origin;
+    type Call = Call;
     type PalletId = CrowdloansPalletId;
     type SelfParaId = SelfParaId;
-    type XcmSender = XcmRouter;
     type Assets = Assets;
-    type RelayNetwork = RelayNetwork;
     type RelayCurrency = RelayCurrency;
     type AccountIdToMultiLocation = AccountIdToMultiLocation;
+    type RefundLocation = RefundLocation;
+    type MinContribution = MinContribution;
+    type MaxVrfs = MaxVrfs;
+    type MigrateKeysLimit = MigrateKeysLimit;
     type UpdateOrigin = EnsureRoot<AccountId>;
+    type MigrateOrigin = EnsureRoot<AccountId>;
     type CreateVaultOrigin = CreateVaultOrigin;
-    type PariticipateOrigin = PariticipateOrigin;
-    type CloseOrigin = CloseOrigin;
+    type UpdateVaultOrigin = UpdateVaultOrigin;
+    type VrfOrigin = VrfOrigin;
+    type OpenCloseOrigin = OpenCloseOrigin;
     type AuctionFailedOrigin = AuctionFailedOrigin;
-    type AuctionCompletedOrigin = AuctionCompletedOrigin;
     type SlotExpiredOrigin = SlotExpiredOrigin;
-    type MaxReserves = MaxReserves;
-    type PariticipationPeriod = PariticipationPeriod;
     type WeightInfo = ();
+    type XCM = XcmHelper;
+    type RelayChainBlockNumberProvider = RelayChainBlockNumberProvider<Test>;
+}
+
+parameter_types! {
+    pub const XcmHelperPalletId: PalletId = PalletId(*b"par/fees");
+    pub const NotifyTimeout: BlockNumber = 100;
+}
+
+impl pallet_xcm_helper::Config for Test {
+    type Assets = Assets;
+    type XcmSender = XcmRouter;
+    type PalletId = XcmHelperPalletId;
+    type RelayNetwork = RelayNetwork;
+    type NotifyTimeout = NotifyTimeout;
+    type BlockNumberProvider = frame_system::Pallet<Test>;
 }
 
 parameter_types! {
@@ -379,7 +431,7 @@ construct_runtime!(
         DmpQueue: cumulus_pallet_dmp_queue::{Pallet, Call, Storage, Event<T>},
         CumulusXcm: cumulus_pallet_xcm::{Pallet, Event<T>, Origin},
         PolkadotXcm: pallet_xcm::{Pallet, Call, Event<T>, Origin},
-
+        XcmHelper: pallet_xcm_helper::{Pallet},
         XTokens: orml_xtokens::{Pallet, Storage, Call, Event<T>},
     }
 );
@@ -401,12 +453,11 @@ pub(crate) fn new_test_ext() -> sp_io::TestExternalities {
         Assets::mint(
             Origin::signed(ALICE),
             DOT,
-            Id(Crowdloans::account_id()),
-            dot(10f64) + 1,
+            Id(XcmHelper::account_id()),
+            dot(30f64),
         )
         .unwrap();
-        TotalReserves::<Test>::mutate(|b| *b = dot(10f64));
-        Crowdloans::update_xcm_fees_compensation(Origin::root(), dot(10f64)).unwrap();
+        Crowdloans::update_xcm_fees(Origin::root(), dot(10f64)).unwrap();
     });
 
     ext
@@ -467,12 +518,11 @@ pub fn para_ext(para_id: u32) -> sp_io::TestExternalities {
         Assets::mint(
             Origin::signed(ALICE),
             DOT,
-            Id(Crowdloans::account_id()),
-            dot(10f64) + 1,
+            Id(XcmHelper::account_id()),
+            dot(30f64),
         )
         .unwrap();
-        TotalReserves::<Test>::mutate(|b| *b = dot(10f64));
-        Crowdloans::update_xcm_fees_compensation(Origin::root(), dot(10f64)).unwrap();
+        Crowdloans::update_xcm_fees(Origin::root(), dot(10f64)).unwrap();
     });
 
     ext

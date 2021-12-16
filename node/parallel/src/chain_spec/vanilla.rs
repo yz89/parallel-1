@@ -19,7 +19,7 @@ use sp_consensus_aura::sr25519::AuthorityId as AuraId;
 use sp_core::sr25519;
 use sp_runtime::{traits::Zero, FixedPointNumber};
 use vanilla_runtime::{
-    opaque::SessionKeys, BalancesConfig, CollatorSelectionConfig, CrowdloansConfig,
+    opaque::SessionKeys, BalancesConfig, BridgeMembershipConfig, CollatorSelectionConfig,
     DemocracyConfig, GeneralCouncilConfig, GeneralCouncilMembershipConfig, GenesisConfig,
     LiquidStakingConfig, OracleMembershipConfig, ParachainInfoConfig, PolkadotXcmConfig,
     SessionConfig, SudoConfig, SystemConfig, TechnicalCommitteeMembershipConfig,
@@ -52,6 +52,7 @@ pub fn vanilla_dev_config(id: ParaId) -> ChainSpec {
                 get_authority_keys_from_seed("Charlie"),
             ];
             let oracle_accounts = vec![get_account_id_from_seed::<sr25519::Public>("Ferdie")];
+            let bridge_accounts = vec![get_account_id_from_seed::<sr25519::Public>("Alice")];
             let validator_feeders = vec![get_account_id_from_seed::<sr25519::Public>("Eve")];
             let initial_allocation: Vec<(AccountId, Balance)> = accumulate(
                 vec![
@@ -99,6 +100,7 @@ pub fn vanilla_dev_config(id: ParaId) -> ChainSpec {
                 root_key,
                 invulnerables,
                 oracle_accounts,
+                bridge_accounts,
                 initial_allocation,
                 validator_feeders,
                 council,
@@ -253,6 +255,7 @@ fn vanilla_genesis(
     root_key: AccountId,
     invulnerables: Vec<(AccountId, AuraId)>,
     oracle_accounts: Vec<AccountId>,
+    bridge_accounts: Vec<AccountId>,
     initial_allocation: Vec<(AccountId, Balance)>,
     validator_feeders: Vec<AccountId>,
     council: Vec<AccountId>,
@@ -300,7 +303,7 @@ fn vanilla_genesis(
         parachain_info: ParachainInfoConfig { parachain_id: id },
         liquid_staking: LiquidStakingConfig {
             exchange_rate: Rate::saturating_from_rational(100, 100), // 1
-            reserve_factor: Ratio::from_perthousand(5),
+            reserve_factor: Ratio::from_rational(5u32, 1000u32),
         },
         crowdloans: CrowdloansConfig {
             reserve_factor: Ratio::from_perthousand(5),
@@ -319,6 +322,10 @@ fn vanilla_genesis(
         treasury: Default::default(),
         oracle_membership: OracleMembershipConfig {
             members: oracle_accounts,
+            phantom: Default::default(),
+        },
+        bridge_membership: BridgeMembershipConfig {
+            members: bridge_accounts,
             phantom: Default::default(),
         },
         validator_feeders_membership: ValidatorFeedersMembershipConfig {

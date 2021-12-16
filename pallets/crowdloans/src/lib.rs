@@ -13,6 +13,10 @@
 // limitations under the License.
 
 //! # Crowdloans pallet
+//!
+//! ## Overview
+//!
+//! Support your favorite parachains' crowdloans while releasing liquidity via crowdloans derivatives
 
 #![cfg_attr(not(feature = "std"), no_std)]
 
@@ -23,9 +27,6 @@ mod mock;
 #[cfg(test)]
 mod tests;
 
-#[macro_use]
-extern crate primitives;
-
 pub mod types;
 pub mod weights;
 
@@ -33,35 +34,33 @@ pub use pallet::*;
 
 #[frame_support::pallet]
 pub mod pallet {
-    use crate::types::*;
+    use crate::{types::*, weights::WeightInfo};
 
     use frame_support::{
         dispatch::DispatchResult,
         log,
         pallet_prelude::*,
         require_transactional,
-        storage::with_transaction,
+        storage::{child, ChildTriePrefixIterator},
         traits::{
             fungibles::{Inspect, Mutate, Transfer},
             Get,
         },
-        transactional, Blake2_128Concat, PalletId,
+        transactional, Blake2_128Concat, BoundedVec, PalletId,
     };
-    use frame_system::{
-        ensure_signed,
-        pallet_prelude::{BlockNumberFor, OriginFor},
-    };
-    use primitives::{ump::XcmWeightMisc, Balance, CurrencyId, ParaId, Ratio};
+    use frame_system::{ensure_signed, pallet_prelude::OriginFor};
+    use pallet_xcm::ensure_response;
+    use primitives::{ump::*, Balance, BlockNumber, CurrencyId, ParaId, TrieIndex};
     use sp_runtime::{
-        traits::{AccountIdConversion, Convert, Zero},
-        ArithmeticError, DispatchError, MultiSignature, TransactionOutcome,
+        traits::{AccountIdConversion, BlockNumberProvider, Convert, Hash, Zero},
+        ArithmeticError, DispatchError,
     };
-    use sp_std::vec;
-    use sp_std::{cmp::min, vec::Vec};
-    use xcm::{latest::prelude::*, DoubleEncoded};
+    use sp_std::{boxed::Box, convert::TryInto, vec::Vec};
+    use xcm::latest::prelude::*;
 
-    use crate::weights::WeightInfo;
+    use pallet_xcm_helper::XcmHelper;
 
+    pub type AccountIdOf<T> = <T as frame_system::Config>::AccountId;
     pub type AssetIdOf<T> =
         <<T as Config>::Assets as Inspect<<T as frame_system::Config>::AccountId>>::AssetId;
     pub type BalanceOf<T> =
@@ -72,7 +71,7 @@ pub mod pallet {
     pub struct Pallet<T>(_);
 
     #[pallet::config]
-    pub trait Config: frame_system::Config {
+    pub trait Config: frame_system::Config + pallet_xcm::Config {
         type Event: From<Event<Self>> + IsType<<Self as frame_system::Config>::Event>;
 
         /// Assets for deposit/withdraw assets to/from crowdloan account
@@ -80,56 +79,76 @@ pub mod pallet {
             + Inspect<Self::AccountId, AssetId = CurrencyId, Balance = Balance>
             + Mutate<Self::AccountId, AssetId = CurrencyId, Balance = Balance>;
 
-        /// XCM message sender
-        type XcmSender: SendXcm;
+        type Origin: IsType<<Self as frame_system::Config>::Origin>
+            + Into<Result<pallet_xcm::Origin, <Self as Config>::Origin>>;
+
+        type Call: IsType<<Self as pallet_xcm::Config>::Call> + From<Call<Self>>;
 
         /// Returns the parachain ID we are running with.
         #[pallet::constant]
         type SelfParaId: Get<ParaId>;
 
-        /// Relay network
-        #[pallet::constant]
-        type RelayNetwork: Get<NetworkId>;
-
         /// Relay currency
         #[pallet::constant]
         type RelayCurrency: Get<AssetIdOf<Self>>;
 
+        /// Pallet account for collecting contributions
         #[pallet::constant]
         type PalletId: Get<PalletId>;
 
         /// Convert `T::AccountId` to `MultiLocation`.
         type AccountIdToMultiLocation: Convert<Self::AccountId, MultiLocation>;
 
-        /// Max reserved token amount for paying xcm fees
-        type MaxReserves: Get<BalanceOf<Self>>;
+        /// Account on relaychain for receiving refunded fees
+        #[pallet::constant]
+        type RefundLocation: Get<Self::AccountId>;
 
-        /// Period of particpating on relaychain
-        type PariticipationPeriod: Get<BlockNumberFor<Self>>;
+        /// Minimum contribute amount
+        #[pallet::constant]
+        type MinContribution: Get<BalanceOf<Self>>;
 
-        /// The origin which can update reserve_factor, xcm_fees_compensation etc
-        type UpdateOrigin: EnsureOrigin<Self::Origin>;
+        /// Maximum number of vrf crowdloans
+        #[pallet::constant]
+        type MaxVrfs: Get<u32>;
+
+        /// Maximum keys to be migrated in one extrinsic
+        #[pallet::constant]
+        type MigrateKeysLimit: Get<u32>;
+
+        /// The origin which can update reserve_factor, xcm_fees etc
+        type UpdateOrigin: EnsureOrigin<<Self as frame_system::Config>::Origin>;
+
+        /// The origin which can migrate pending contribution
+        type MigrateOrigin: EnsureOrigin<<Self as frame_system::Config>::Origin>;
+
+        /// The origin which can set vrfs
+        type VrfOrigin: EnsureOrigin<<Self as frame_system::Config>::Origin>;
 
         /// The origin which can create vault
-        type CreateVaultOrigin: EnsureOrigin<Self::Origin>;
+        type CreateVaultOrigin: EnsureOrigin<<Self as frame_system::Config>::Origin>;
 
-        /// The origin which can pariticipate
-        type PariticipateOrigin: EnsureOrigin<Self::Origin>;
+        /// The origin which can update vault
+        type UpdateVaultOrigin: EnsureOrigin<<Self as frame_system::Config>::Origin>;
 
-        /// The origin which can close vault
-        type CloseOrigin: EnsureOrigin<Self::Origin>;
+        /// The origin which can close/reopen vault
+        type OpenCloseOrigin: EnsureOrigin<<Self as frame_system::Config>::Origin>;
 
         /// The origin which can call auction failed
-        type AuctionFailedOrigin: EnsureOrigin<Self::Origin>;
-
-        /// The origin which can call auction completed
-        type AuctionCompletedOrigin: EnsureOrigin<Self::Origin>;
+        type AuctionFailedOrigin: EnsureOrigin<<Self as frame_system::Config>::Origin>;
 
         /// The origin which can call slot expired
-        type SlotExpiredOrigin: EnsureOrigin<Self::Origin>;
+        type SlotExpiredOrigin: EnsureOrigin<<Self as frame_system::Config>::Origin>;
 
         /// Weight information
         type WeightInfo: WeightInfo;
+
+        /// The relay's BlockNumber provider
+        type RelayChainBlockNumberProvider: BlockNumberProvider<
+            BlockNumber = primitives::BlockNumber,
+        >;
+
+        /// To expose XCM helper functions
+        type XCM: XcmHelper<Self, BalanceOf<Self>, AssetIdOf<Self>, Self::AccountId>;
     }
 
     #[pallet::event]
@@ -137,110 +156,95 @@ pub mod pallet {
     pub enum Event<T: Config> {
         /// New vault was created
         VaultCreated(ParaId, AssetIdOf<T>),
-        /// User contributed amount to vault
-        VaultContributed(ParaId, T::AccountId, BalanceOf<T>),
-        /// Vault particpated on relaychain
-        VaultParticipated(ParaId, BalanceOf<T>),
+        /// Existing vault was updated
+        VaultUpdated(ParaId),
+        /// User is contributing amount to vault
+        VaultContributing(ParaId, T::AccountId, BalanceOf<T>, Vec<u8>),
+        /// Vault was opened
+        VaultOpened(ParaId),
         /// Vault was closed
         VaultClosed(ParaId),
-        /// Auction failed
-        VaultAuctionFailed(ParaId),
+        /// Vault was reopened
+        VaultReOpened(ParaId),
+        /// Auction is failing
+        VaultAuctionFailing(ParaId),
         /// A user claimed refund from vault
-        VaultClaimRefund(ParaId, T::AccountId, BalanceOf<T>),
-        /// A vault was expired
-        VaultSlotExpired(ParaId),
-        /// ReserveFactor was updated
-        ReserveFactorUpdated(Ratio),
+        VaultClaimRefund(AssetIdOf<T>, T::AccountId, BalanceOf<T>),
+        /// A vault is expiring
+        VaultSlotExpiring(ParaId),
         /// Xcm weight in BuyExecution message
         XcmWeightUpdated(XcmWeightMisc<Weight>),
-        /// Compensation for extrinsics on relaychain was set to new value
-        XcmFeesCompensationUpdated(BalanceOf<T>),
-        /// Sent crowdloan.contribute call to relaychain
-        Contributing(ParaId, BalanceOf<T>, Option<MultiSignature>),
-        /// Sent crowdloan.withdraw call to relaychain
-        Withdrawing(ParaId, T::AccountId),
+        /// Fees for extrinsics on relaychain were set to new value
+        XcmFeesUpdated(BalanceOf<T>),
+        /// Vrfs updated
+        VrfsUpdated(BoundedVec<ParaId, T::MaxVrfs>),
+        /// Notification received
+        NotificationReceived(Box<MultiLocation>, QueryId, Option<(u32, XcmError)>),
+        /// All migrated
+        AllMigrated(ParaId),
+        /// Partially migrated
+        PartiallyMigrated(ParaId),
     }
 
     #[pallet::error]
     pub enum Error<T> {
         /// Vault is not in correct phase
         IncorrectVaultPhase,
-        /// Crowdload ParaId aready exists
+        /// Crowdloan ParaId aready exists
         CrowdloanAlreadyExists,
-        /// Amount is not enough
+        /// Contribution is not enough
+        InsufficientContribution,
+        /// Balance is not enough
         InsufficientBalance,
         /// Vault does not exist
         VaultDoesNotExist,
-        /// Vault contributed greater than issuance
-        ContributedGreaterThanIssuance,
-        /// Vault with specific ctoken already created
-        CTokenVaultAlreadyCreated,
-        /// Xcm message send failure
-        SendXcmError,
+        /// Ctoken already taken by another vault
+        CTokenAlreadyTaken,
+        /// ParaId already taken by another vault
+        ParaIdAlreadyTaken,
+        /// No contributions allowed during the VRF delay
+        VrfDelayInProgress,
+        /// Attempted contribution violates contribution cap
+        ExceededCap,
+        /// Current relay block is greater then vault end block
+        ExceededEndBlock,
+        /// Exceeded maximum vrfs
+        ExceededMaxVrfs,
+        /// Pending contribution must be killed before entering `Contributing` vault phase
+        PendingContributionNotKilled,
     }
 
     #[pallet::storage]
     #[pallet::getter(fn vaults)]
-    pub type Vaults<T: Config> = StorageMap<_, Blake2_128Concat, ParaId, Vault<T>, OptionQuery>;
+    pub type Vaults<T: Config> =
+        StorageDoubleMap<_, Blake2_128Concat, ParaId, Blake2_128Concat, u32, Vault<T>, OptionQuery>;
 
     #[pallet::storage]
-    #[pallet::getter(fn reserve_factor)]
-    pub type ReserveFactor<T: Config> = StorageValue<_, Ratio, ValueQuery>;
+    #[pallet::getter(fn vrfs)]
+    pub type Vrfs<T: Config> =
+        StorageValue<_, BoundedVec<ParaId, <T as Config>::MaxVrfs>, ValueQuery>;
 
     #[pallet::storage]
-    #[pallet::getter(fn total_reserves)]
-    pub type TotalReserves<T: Config> = StorageValue<_, BalanceOf<T>, ValueQuery>;
+    #[pallet::getter(fn ctokens_registry)]
+    pub type CTokensRegistry<T: Config> =
+        StorageMap<_, Blake2_128Concat, AssetIdOf<T>, (ParaId, u32), OptionQuery>;
 
     #[pallet::storage]
-    #[pallet::getter(fn xcm_fees_compensation)]
-    pub type XcmFeesCompensation<T: Config> = StorageValue<_, BalanceOf<T>, ValueQuery>;
+    #[pallet::getter(fn current_index)]
+    pub type BatchIndexes<T: Config> = StorageMap<_, Blake2_128Concat, ParaId, u32, OptionQuery>;
 
     #[pallet::storage]
-    #[pallet::getter(fn xcm_weight)]
-    pub type XcmWeight<T: Config> = StorageValue<_, XcmWeightMisc<Weight>, ValueQuery>;
+    #[pallet::getter(fn next_trie_index)]
+    pub type NextTrieIndex<T> = StorageValue<_, u32, ValueQuery>;
 
-    #[pallet::genesis_config]
-    pub struct GenesisConfig {
-        pub reserve_factor: Ratio,
-    }
-
-    #[cfg(feature = "std")]
-    impl Default for GenesisConfig {
-        fn default() -> Self {
-            Self {
-                reserve_factor: Ratio::default(),
-            }
-        }
-    }
-
-    #[pallet::genesis_build]
-    impl<T: Config> GenesisBuild<T> for GenesisConfig {
-        fn build(&self) {
-            ReserveFactor::<T>::put(self.reserve_factor);
-        }
-    }
-
-    #[pallet::hooks]
-    impl<T: Config> Hooks<BlockNumberFor<T>> for Pallet<T> {
-        fn on_initialize(n: BlockNumberFor<T>) -> frame_support::weights::Weight {
-            if !(n % T::PariticipationPeriod::get()).is_zero() {
-                return Zero::zero();
-            }
-
-            Self::participate_all()
-        }
-    }
+    #[pallet::storage]
+    #[pallet::getter(fn xcm_inflight)]
+    pub type XcmInflight<T> =
+        StorageMap<_, Blake2_128Concat, QueryId, XcmInflightRequest<T>, OptionQuery>;
 
     #[pallet::call]
     impl<T: Config> Pallet<T> {
         /// Create a new vault via a governance decision
-        /// - `crowdloan` represents which crowdloan we are supporting on the relay
-        ///   chain
-        /// - `ctoken` is a new asset created for this vault to represent the shares
-        ///   of the vault's contributors which will later be used for refunding their
-        ///   contributions
-        /// - `contribution_strategy` represents how we can contribute coins to the
-        ///   crowdloan on the relay chain
         #[pallet::weight(<T as Config>::WeightInfo::create_vault())]
         #[transactional]
         pub fn create_vault(
@@ -248,35 +252,124 @@ pub mod pallet {
             crowdloan: ParaId,
             ctoken: AssetIdOf<T>,
             contribution_strategy: ContributionStrategy,
+            #[pallet::compact] cap: BalanceOf<T>,
+            end_block: BlockNumber,
         ) -> DispatchResult {
-            // 1. EnsureOrigin
             T::CreateVaultOrigin::ensure_origin(origin)?;
 
-            // 2. make sure both ctoken is a new asset (total_issuance == Zero::zero())
             let ctoken_issuance = T::Assets::total_issuance(ctoken);
-
-            // make sure both project_shares and currency_shares are new assets
             ensure!(
-                ctoken_issuance.is_zero(),
-                Error::<T>::CTokenVaultAlreadyCreated
+                ctoken_issuance.is_zero() && !CTokensRegistry::<T>::contains_key(ctoken),
+                Error::<T>::CTokenAlreadyTaken
             );
 
-            // 3. make sure no similar vault already exists as identified by crowdloan
-            // add new vault to vaults storage
-            Vaults::<T>::try_mutate(&crowdloan, |vault| -> Result<_, DispatchError> {
-                // make sure no similar vault already exists as identified by crowdloan
-                ensure!(vault.is_none(), Error::<T>::CrowdloanAlreadyExists);
+            // users shouldn't be able to create a new vault if the previous one is not finished
+            if let Some(vault) = Self::current_vault(crowdloan) {
+                if vault.phase != VaultPhase::Failed && vault.phase != VaultPhase::Expired {
+                    return Err(DispatchError::from(Error::<T>::ParaIdAlreadyTaken));
+                }
+            }
 
-                // 4. mutate our storage to register a new vault
-                // inialize new vault
-                let new_vault = Vault::from((ctoken, contribution_strategy));
+            let next_index = Self::next_index(crowdloan);
+            ensure!(
+                !Vaults::<T>::contains_key(crowdloan, next_index),
+                Error::<T>::CrowdloanAlreadyExists
+            );
 
-                // store update
-                *vault = Some(new_vault);
+            ensure!(
+                T::RelayChainBlockNumberProvider::current_block_number() <= end_block,
+                Error::<T>::ExceededEndBlock
+            );
 
-                // Emit event of trade with rate calculated
-                Self::deposit_event(Event::<T>::VaultCreated(crowdloan, ctoken));
+            let trie_index = Self::next_trie_index();
+            let next_trie_index = trie_index.checked_add(1).ok_or(ArithmeticError::Overflow)?;
+            let new_vault = Vault::new(
+                next_index,
+                ctoken,
+                contribution_strategy,
+                cap,
+                end_block,
+                trie_index,
+            );
 
+            log::trace!(
+                target: "crowdloans::create_vault",
+                "ctoken_issuance: {:?}, next_index: {:?}, trie_index: {:?}, ctoken: {:?}, trie_index: {:?}",
+                ctoken_issuance,
+                next_index,
+                trie_index,
+                ctoken,
+                trie_index,
+            );
+
+            NextTrieIndex::<T>::put(next_trie_index);
+            Vaults::<T>::insert(crowdloan, next_index, new_vault);
+            CTokensRegistry::<T>::insert(ctoken, (crowdloan, next_index));
+            BatchIndexes::<T>::insert(crowdloan, next_index);
+
+            Self::deposit_event(Event::<T>::VaultCreated(crowdloan, ctoken));
+
+            Ok(())
+        }
+
+        /// Update an exisiting vault via a governance decision
+        #[pallet::weight(<T as Config>::WeightInfo::update_vault())]
+        #[transactional]
+        pub fn update_vault(
+            origin: OriginFor<T>,
+            crowdloan: ParaId,
+            cap: Option<BalanceOf<T>>,
+            end_block: Option<BlockNumber>,
+            contribution_strategy: Option<ContributionStrategy>,
+        ) -> DispatchResult {
+            T::UpdateVaultOrigin::ensure_origin(origin)?;
+
+            let mut vault = Self::current_vault(crowdloan).ok_or(Error::<T>::VaultDoesNotExist)?;
+
+            if let Some(cap) = cap {
+                vault.cap = cap;
+            }
+
+            if let Some(end_block) = end_block {
+                ensure!(
+                    T::RelayChainBlockNumberProvider::current_block_number() <= end_block,
+                    Error::<T>::ExceededEndBlock
+                );
+
+                vault.end_block = end_block;
+            }
+
+            if let Some(contribution_strategy) = contribution_strategy {
+                vault.contribution_strategy = contribution_strategy;
+            }
+
+            Self::deposit_event(Event::<T>::VaultUpdated(crowdloan));
+
+            Ok(())
+        }
+
+        /// Mark the associated vault as ready for real contributions on the relaychain
+        #[pallet::weight(<T as Config>::WeightInfo::open())]
+        #[transactional]
+        pub fn open(origin: OriginFor<T>, crowdloan: ParaId) -> DispatchResult {
+            T::OpenCloseOrigin::ensure_origin(origin)?;
+
+            log::trace!(
+                target: "crowdloans::open",
+                "pre-toggle. crowdloan: {:?}",
+                crowdloan,
+            );
+
+            Self::try_mutate_vault(crowdloan, VaultPhase::Pending, |vault| {
+                ensure!(
+                    Self::contribution_iterator(vault.trie_index, true)
+                        .count()
+                        .is_zero()
+                        && vault.pending.is_zero(),
+                    Error::<T>::PendingContributionNotKilled
+                );
+                vault.phase = VaultPhase::Contributing;
+                Self::deposit_event(Event::<T>::VaultOpened(crowdloan));
                 Ok(())
             })
         }
@@ -289,84 +382,127 @@ pub mod pallet {
             origin: OriginFor<T>,
             crowdloan: ParaId,
             #[pallet::compact] amount: BalanceOf<T>,
+            referral_code: Vec<u8>,
         ) -> DispatchResultWithPostInfo {
             let who = ensure_signed(origin)?;
 
-            // 1. Make sure crowdloan has a vault linked to it
-            let vault = Self::vault(crowdloan)?;
+            let mut vault = Self::current_vault(crowdloan).ok_or(Error::<T>::VaultDoesNotExist)?;
 
-            // 2. Make sure the vault.phase == CollectingContributions
             ensure!(
-                vault.phase == VaultPhase::CollectingContributions,
+                T::RelayChainBlockNumberProvider::current_block_number() <= vault.end_block,
+                Error::<T>::ExceededEndBlock
+            );
+
+            ensure!(
+                vault.phase == VaultPhase::Contributing || vault.phase == VaultPhase::Pending,
                 Error::<T>::IncorrectVaultPhase
             );
 
-            let reserves = min(
-                Self::reserve_factor().mul_floor(amount),
-                T::MaxReserves::get(),
+            ensure!(
+                amount >= T::MinContribution::get(),
+                Error::<T>::InsufficientContribution
             );
-            TotalReserves::<T>::try_mutate(|b| -> DispatchResult {
-                *b = b.checked_add(reserves).ok_or(ArithmeticError::Overflow)?;
-                Ok(())
-            })?;
 
-            // 3. Make sure origin has at least amount of vault.currency (checked in transfer)
-            // 4. Wire amount of vault.currency to the pallet's account id
+            ensure!(
+                !Self::vrfs().iter().any(|&c| c == crowdloan),
+                Error::<T>::VrfDelayInProgress
+            );
+
             T::Assets::transfer(
                 T::RelayCurrency::get(),
                 &who,
-                &Self::account_id(),
+                &Self::vault_account_id(crowdloan),
                 amount,
-                false,
-            )
-            .map_err(|_: DispatchError| Error::<T>::InsufficientBalance)?;
+                true,
+            )?;
 
-            let amount = amount
-                .checked_sub(reserves)
-                .ok_or(ArithmeticError::Underflow)?;
+            let total_contribution = Self::cap(&vault, amount)?;
 
-            // 5. Create amount of vault.ctoken to origin
-            T::Assets::mint_into(vault.ctoken, &who, amount)?;
+            // throw if new value overflows cap
+            ensure!(total_contribution <= vault.cap, Error::<T>::ExceededCap);
 
-            // emit event
-            Self::deposit_event(Event::<T>::VaultContributed(crowdloan, who, amount));
+            if vault.phase == VaultPhase::Contributing && !Self::has_vrfs() {
+                Self::do_contribute(&who, crowdloan, amount)?;
+            }
+
+            Self::do_pending_contribution(&who, &mut vault, amount)?;
+
+            Vaults::<T>::insert(crowdloan, vault.id, vault);
+
+            log::trace!(
+                target: "crowdloans::contribute",
+                "who: {:?}, crowdloan: {:?}, amount: {:?}",
+                &who,
+                &crowdloan,
+                &amount,
+            );
+
+            Self::deposit_event(Event::<T>::VaultContributing(
+                crowdloan,
+                who,
+                amount,
+                referral_code,
+            ));
 
             Ok(().into())
         }
 
-        /// Once a auction loan vault is expired, move the coins to the relay chain
-        /// and participate in a relay chain crowdloan by using the call `call`.
-        #[pallet::weight(<T as Config>::WeightInfo::participate())]
+        /// Set crowdloans which entered vrf period
+        #[pallet::weight(<T as Config>::WeightInfo::set_vrfs())]
         #[transactional]
-        pub fn participate(origin: OriginFor<T>, crowdloan: ParaId) -> DispatchResult {
-            // 1. EnsureOrigin
-            T::PariticipateOrigin::ensure_origin(origin)?;
-            Self::participate_internal(crowdloan)
+        pub fn set_vrfs(origin: OriginFor<T>, vrfs: Vec<ParaId>) -> DispatchResult {
+            T::VrfOrigin::ensure_origin(origin)?;
+
+            log::trace!(
+                target: "crowdloans::set_vrfs",
+                "pre-toggle. vrfs: {:?}",
+                vrfs
+            );
+
+            Vrfs::<T>::try_mutate(|b| -> Result<(), DispatchError> {
+                *b = vrfs.try_into().map_err(|_| Error::<T>::ExceededMaxVrfs)?;
+                Ok(())
+            })?;
+
+            Self::deposit_event(Event::<T>::VrfsUpdated(Self::vrfs()));
+
+            Ok(())
         }
 
-        /// Mark the associated vault as closed and stop accepting contributions for it
+        /// Mark the associated vault as `Closed` and stop accepting contributions
         #[pallet::weight(<T as Config>::WeightInfo::close())]
         #[transactional]
         pub fn close(origin: OriginFor<T>, crowdloan: ParaId) -> DispatchResult {
-            // 1. EnsureOrigin
-            T::CloseOrigin::ensure_origin(origin)?;
+            T::OpenCloseOrigin::ensure_origin(origin)?;
 
-            Vaults::<T>::try_mutate(&crowdloan, |vault| -> Result<_, DispatchError> {
-                // make sure there's a vault
-                let mut vault_contents = vault.as_mut().ok_or(Error::<T>::VaultDoesNotExist)?;
+            log::trace!(
+                target: "crowdloans::close",
+                "pre-toggle. crowdloan: {:?}",
+                crowdloan,
+            );
 
-                // 2. Make sure vault.phase == VaultPhase::CollectingContributions
-                ensure!(
-                    vault_contents.phase == VaultPhase::CollectingContributions,
-                    Error::<T>::IncorrectVaultPhase
-                );
-
-                // 3. Change vault.phase to Closed
-                vault_contents.phase = VaultPhase::Closed;
-
-                // Emit event of trade with rate calculated
+            Self::try_mutate_vault(crowdloan, VaultPhase::Contributing, |vault| {
+                vault.phase = VaultPhase::Closed;
                 Self::deposit_event(Event::<T>::VaultClosed(crowdloan));
+                Ok(())
+            })
+        }
 
+        /// Mark the associated vault as `Contributing` and continue to accept contributions
+        #[pallet::weight(<T as Config>::WeightInfo::reopen())]
+        #[transactional]
+        pub fn reopen(origin: OriginFor<T>, crowdloan: ParaId) -> DispatchResult {
+            T::OpenCloseOrigin::ensure_origin(origin)?;
+
+            log::trace!(
+                target: "crowdloans::reopen",
+                "pre-toggle. crowdloan: {:?}",
+                crowdloan,
+            );
+
+            Self::try_mutate_vault(crowdloan, VaultPhase::Closed, |vault| {
+                vault.phase = VaultPhase::Contributing;
+                Self::deposit_event(Event::<T>::VaultReOpened(crowdloan));
                 Ok(())
             })
         }
@@ -376,30 +512,17 @@ pub mod pallet {
         #[pallet::weight(<T as Config>::WeightInfo::auction_failed())]
         #[transactional]
         pub fn auction_failed(origin: OriginFor<T>, crowdloan: ParaId) -> DispatchResult {
-            // 1. `EnsureOrigin`
             T::AuctionFailedOrigin::ensure_origin(origin)?;
 
-            Vaults::<T>::try_mutate(&crowdloan, |vault| -> Result<_, DispatchError> {
-                // make sure there's a vault
-                let mut vault_contents = vault.as_mut().ok_or(Error::<T>::VaultDoesNotExist)?;
+            log::trace!(
+                target: "crowdloans::auction_failed",
+                "pre-toggle. crowdloan: {:?}",
+                crowdloan,
+            );
 
-                // 2. Make sure `vault.phase == Closed`
-                ensure!(
-                    vault_contents.phase == VaultPhase::Closed,
-                    Error::<T>::IncorrectVaultPhase
-                );
-
-                // 3. Execute the `refund` function of the `contribution_strategy`
-                vault_contents
-                    .contribution_strategy
-                    .withdraw::<T>(crowdloan, vault_contents.contributed)?;
-
-                // 4. Set `vault.phase` to `Failed`
-                vault_contents.phase = VaultPhase::Failed;
-
-                // Emit event of trade with rate calculated
-                Self::deposit_event(Event::<T>::VaultAuctionFailed(crowdloan));
-
+            Self::try_mutate_vault(crowdloan, VaultPhase::Closed, |vault| {
+                Self::do_withdraw(crowdloan, vault.contributed, VaultPhase::Failed)?;
+                Self::deposit_event(Event::<T>::VaultAuctionFailing(crowdloan));
                 Ok(())
             })
         }
@@ -410,49 +533,42 @@ pub mod pallet {
         #[transactional]
         pub fn claim_refund(
             origin: OriginFor<T>,
-            crowdloan: ParaId,
+            ctoken: AssetIdOf<T>,
             #[pallet::compact] amount: BalanceOf<T>,
         ) -> DispatchResult {
             let who = ensure_signed(origin)?;
 
-            Vaults::<T>::try_mutate(&crowdloan, |vault| -> Result<_, DispatchError> {
-                // make sure there's a vault
-                let vault_contents = vault.as_mut().ok_or(Error::<T>::VaultDoesNotExist)?;
+            let (crowdloan, index) =
+                Self::ctokens_registry(ctoken).ok_or(Error::<T>::VaultDoesNotExist)?;
+            let vault = Self::vaults(crowdloan, index).ok_or(Error::<T>::VaultDoesNotExist)?;
 
-                // 1. Make sure `vault.phase == Failed` **or `Expired`** (more on that later)
-                ensure!(
-                    vault_contents.phase == VaultPhase::Failed
-                        || vault_contents.phase == VaultPhase::Expired,
-                    Error::<T>::IncorrectVaultPhase
-                );
+            ensure!(
+                vault.phase == VaultPhase::Failed || vault.phase == VaultPhase::Expired,
+                Error::<T>::IncorrectVaultPhase
+            );
 
-                // 2. Make sure `origin` has at least `amount` of `vault.ctoken`
-                // get amount origin has
-                let origin_ctoken_amount =
-                    <T as Config>::Assets::reducible_balance(vault_contents.ctoken, &who, false);
+            let ctoken_amount = T::Assets::reducible_balance(vault.ctoken, &who, false);
+            ensure!(ctoken_amount >= amount, Error::<T>::InsufficientBalance);
 
-                ensure!(
-                    origin_ctoken_amount >= amount,
-                    Error::<T>::InsufficientBalance
-                );
+            log::trace!(
+                target: "crowdloans::claim_refund",
+                "pre-toggle. ctoken: {:?}",
+                ctoken,
+            );
 
-                // 3. Burns `amount` from `vault.ctoken`
-                T::Assets::burn_from(vault_contents.ctoken, &who, amount)?;
+            T::Assets::burn_from(vault.ctoken, &who, amount)?;
 
-                // 4. Wire `amount` of `vault.currency` from our account id to the caller
-                T::Assets::transfer(
-                    T::RelayCurrency::get(),
-                    &Self::account_id(),
-                    &who,
-                    amount,
-                    false,
-                )?;
+            T::Assets::transfer(
+                T::RelayCurrency::get(),
+                &Self::vault_account_id(crowdloan),
+                &who,
+                amount,
+                false,
+            )?;
 
-                // Emit event of trade with rate calculated
-                Self::deposit_event(Event::<T>::VaultClaimRefund(crowdloan, who, amount));
+            Self::deposit_event(Event::<T>::VaultClaimRefund(ctoken, who, amount));
 
-                Ok(())
-            })
+            Ok(())
         }
 
         /// If a `crowdloan` succeeded and its slot expired, use `call` to
@@ -460,57 +576,58 @@ pub mod pallet {
         #[pallet::weight(<T as Config>::WeightInfo::slot_expired())]
         #[transactional]
         pub fn slot_expired(origin: OriginFor<T>, crowdloan: ParaId) -> DispatchResult {
-            // 1. `EnsureOrigin`
             T::SlotExpiredOrigin::ensure_origin(origin)?;
 
-            Vaults::<T>::try_mutate(&crowdloan, |vault| -> Result<_, DispatchError> {
-                // make sure there's a vault
-                let mut vault_contents = vault.as_mut().ok_or(Error::<T>::VaultDoesNotExist)?;
-
-                ensure!(
-                    vault_contents.phase == VaultPhase::Closed,
-                    Error::<T>::IncorrectVaultPhase
-                );
-
-                // 2. Execute the `withdraw` function of our `contribution_strategy`
-                vault_contents
-                    .contribution_strategy
-                    .withdraw::<T>(crowdloan, vault_contents.contributed)?;
-
-                // 3. Modify `vault.phase` to `Expired
-                vault_contents.phase = VaultPhase::Expired;
-
-                // Emit event of trade with rate calculated
-                Self::deposit_event(Event::<T>::VaultSlotExpired(crowdloan));
-
+            Self::try_mutate_vault(crowdloan, VaultPhase::Closed, |vault| {
+                Self::do_withdraw(crowdloan, vault.contributed, VaultPhase::Expired)?;
+                Self::deposit_event(Event::<T>::VaultSlotExpiring(crowdloan));
                 Ok(())
             })
         }
 
-        #[pallet::weight(<T as Config>::WeightInfo::update_reserve_factor())]
+        /// migrate pending contribution by sending xcm
+        #[pallet::weight(<T as Config>::WeightInfo::migrate_pending())]
         #[transactional]
-        pub fn update_reserve_factor(
-            origin: OriginFor<T>,
-            reserve_factor: Ratio,
-        ) -> DispatchResultWithPostInfo {
-            T::UpdateOrigin::ensure_origin(origin)?;
-            ReserveFactor::<T>::mutate(|v| *v = reserve_factor);
-            Self::deposit_event(Event::<T>::ReserveFactorUpdated(reserve_factor));
-            Ok(().into())
+        pub fn migrate_pending(origin: OriginFor<T>, crowdloan: ParaId) -> DispatchResult {
+            T::MigrateOrigin::ensure_origin(origin)?;
+
+            let vault = Self::current_vault(crowdloan).ok_or(Error::<T>::VaultDoesNotExist)?;
+            let contributions = Self::contribution_iterator(vault.trie_index, true);
+            let mut migrated_count: u32 = 0u32;
+            let mut all_migrated = true;
+
+            for (who, (amount, _)) in contributions {
+                if migrated_count >= T::MigrateKeysLimit::get() {
+                    all_migrated = false;
+                    break;
+                }
+                Self::do_contribute(&who, crowdloan, amount)?;
+                migrated_count += 1;
+            }
+
+            if all_migrated {
+                Self::deposit_event(Event::<T>::AllMigrated(crowdloan));
+            } else {
+                Self::deposit_event(Event::<T>::PartiallyMigrated(crowdloan));
+            }
+
+            Ok(())
         }
 
-        #[pallet::weight(<T as Config>::WeightInfo::update_xcm_fees_compensation())]
+        /// Update xcm fees amount to be used in xcm.Withdraw message
+        #[pallet::weight(<T as Config>::WeightInfo::update_xcm_fees())]
         #[transactional]
-        pub fn update_xcm_fees_compensation(
+        pub fn update_xcm_fees(
             origin: OriginFor<T>,
             #[pallet::compact] fees: BalanceOf<T>,
         ) -> DispatchResultWithPostInfo {
             T::UpdateOrigin::ensure_origin(origin)?;
-            XcmFeesCompensation::<T>::mutate(|v| *v = fees);
-            Self::deposit_event(Event::<T>::XcmFeesCompensationUpdated(fees));
+            T::XCM::update_xcm_fees(fees);
+            Self::deposit_event(Event::<T>::XcmFeesUpdated(fees));
             Ok(().into())
         }
 
+        /// Update xcm weight to be used in xcm.Transact message
         #[pallet::weight(<T as Config>::WeightInfo::update_xcm_weight())]
         #[transactional]
         pub fn update_xcm_weight(
@@ -518,132 +635,314 @@ pub mod pallet {
             xcm_weight_misc: XcmWeightMisc<Weight>,
         ) -> DispatchResultWithPostInfo {
             T::UpdateOrigin::ensure_origin(origin)?;
-            XcmWeight::<T>::mutate(|v| *v = xcm_weight_misc);
+            T::XCM::update_xcm_weight(xcm_weight_misc);
             Self::deposit_event(Event::<T>::XcmWeightUpdated(xcm_weight_misc));
+            Ok(().into())
+        }
+
+        #[pallet::weight(<T as Config>::WeightInfo::notification_received())]
+        #[transactional]
+        pub fn notification_received(
+            origin: OriginFor<T>,
+            query_id: QueryId,
+            response: Response,
+        ) -> DispatchResultWithPostInfo {
+            let responder = ensure_response(<T as Config>::Origin::from(origin))?;
+            if let Response::ExecutionResult(res) = response {
+                if let Some(request) = Self::xcm_inflight(&query_id) {
+                    Self::do_notification_received(query_id, request, res.is_none())?;
+                }
+
+                Self::deposit_event(Event::<T>::NotificationReceived(
+                    Box::new(responder),
+                    query_id,
+                    res,
+                ));
+            }
             Ok(().into())
         }
     }
 
     impl<T: Config> Pallet<T> {
-        /// Crowdloan pool account
-        pub fn account_id() -> T::AccountId {
-            T::PalletId::get().into_account()
+        /// Crowdloans vault account
+        pub fn vault_account_id(crowdloan: ParaId) -> T::AccountId {
+            T::PalletId::get().into_sub_account(crowdloan)
         }
 
-        /// Parachain sovereign account
+        /// Parachain's sovereign account on relaychain
         pub fn para_account_id() -> T::AccountId {
             T::SelfParaId::get().into_account()
         }
 
-        fn participate_all() -> Weight {
-            with_transaction(|| {
-                let mut consumed: Weight = 0;
-                let weight_unit = <T as Config>::WeightInfo::participate();
-                for crowdloan in Self::active_crowdloans().into_iter() {
-                    match Self::participate_internal(crowdloan).and_then(|_| {
-                        consumed
-                            .checked_add(weight_unit)
-                            .ok_or_else(|| DispatchError::from(ArithmeticError::Overflow))
-                    }) {
-                        Ok(next_consumed) => consumed = next_consumed,
-                        Err(err) => {
-                            log::error!(
-                                "Couldn't participate {:?}'s crowdloan! {:?}",
-                                crowdloan,
-                                err
-                            );
-                            return TransactionOutcome::Rollback(0);
-                        }
-                    }
-                }
-                TransactionOutcome::Commit(consumed)
+        fn has_vrfs() -> bool {
+            Self::vrfs().iter().len() != 0
+        }
+
+        fn next_index(crowdloan: ParaId) -> u32 {
+            Self::current_index(crowdloan)
+                .and_then(|idx| idx.checked_add(1u32))
+                .unwrap_or(0)
+        }
+
+        fn current_vault(crowdloan: ParaId) -> Option<Vault<T>> {
+            Self::current_index(crowdloan).and_then(|index| Self::vaults(crowdloan, index))
+        }
+
+        fn cap(vault: &Vault<T>, amount: BalanceOf<T>) -> Result<BalanceOf<T>, ArithmeticError> {
+            vault
+                .contributed
+                .checked_add(vault.pending)
+                .and_then(|sum| sum.checked_add(amount))
+                .ok_or(ArithmeticError::Overflow)
+        }
+
+        fn notify_placeholder() -> <T as Config>::Call {
+            <T as Config>::Call::from(Call::<T>::notification_received {
+                query_id: Default::default(),
+                response: Default::default(),
             })
         }
 
         #[require_transactional]
-        fn participate_internal(crowdloan: ParaId) -> DispatchResult {
-            Vaults::<T>::try_mutate(&crowdloan, |vault| -> Result<_, DispatchError> {
-                // make sure there's a vault
-                let mut vault_contents = vault.as_mut().ok_or(Error::<T>::VaultDoesNotExist)?;
+        fn do_pending_contribution(
+            who: &AccountIdOf<T>,
+            vault: &mut Vault<T>,
+            amount: BalanceOf<T>,
+        ) -> DispatchResult {
+            vault.pending = vault
+                .pending
+                .checked_add(amount)
+                .ok_or(ArithmeticError::Overflow)?;
+            let (pending, _) = Self::contribution_get(vault.trie_index, who, true);
+            let new_pending = pending
+                .checked_add(amount)
+                .ok_or(ArithmeticError::Overflow)?;
+            Self::contribution_put(vault.trie_index, who, &new_pending, true);
+            Ok(())
+        }
 
-                // 2. Make sure vault.contributed is less than total_issuance(vault.currency_shares)
-                let vault_ctoken_issuance = T::Assets::total_issuance(vault_contents.ctoken);
+        #[require_transactional]
+        fn do_migrate_pending(
+            who: &AccountIdOf<T>,
+            vault: &mut Vault<T>,
+            amount: BalanceOf<T>,
+        ) -> DispatchResult {
+            vault.pending = vault
+                .pending
+                .checked_sub(amount)
+                .ok_or(ArithmeticError::Underflow)?;
+            vault.contributed = vault
+                .contributed
+                .checked_add(amount)
+                .ok_or(ArithmeticError::Overflow)?;
 
-                ensure!(
-                    vault_contents.phase == VaultPhase::CollectingContributions,
-                    Error::<T>::IncorrectVaultPhase
-                );
-                ensure!(
-                    vault_contents.contributed <= vault_ctoken_issuance,
-                    Error::<T>::ContributedGreaterThanIssuance
-                );
+            let (pending, _) = Self::contribution_get(vault.trie_index, who, true);
+            let new_pending = pending
+                .checked_sub(amount)
+                .ok_or(ArithmeticError::Underflow)?;
+            if new_pending.is_zero() {
+                Self::contribution_kill(vault.trie_index, who, true);
+            } else {
+                Self::contribution_put(vault.trie_index, who, &new_pending, true);
+            }
 
-                // 3. Execute vault.contribution_strategy with parameters crowdloan,
-                // cannot underflow because we checked that vault_contents.contributed < vault_ctoken_issuance
-                let amount = vault_ctoken_issuance - vault_contents.contributed;
-                if amount.is_zero() {
-                    return Ok(());
+            let (contributed, _) = Self::contribution_get(vault.trie_index, who, false);
+            let new_contributed = contributed
+                .checked_add(amount)
+                .ok_or(ArithmeticError::Overflow)?;
+            Self::contribution_put(vault.trie_index, who, &new_contributed, false);
+
+            Ok(())
+        }
+
+        #[require_transactional]
+        fn do_notification_received(
+            query_id: QueryId,
+            request: XcmInflightRequest<T>,
+            executed: bool,
+        ) -> DispatchResult {
+            match request {
+                XcmInflightRequest::Contribute {
+                    crowdloan,
+                    who,
+                    amount,
+                } if executed => {
+                    let mut vault =
+                        Self::current_vault(crowdloan).ok_or(Error::<T>::VaultDoesNotExist)?;
+                    T::Assets::mint_into(vault.ctoken, &who, amount)?;
+                    T::Assets::burn_from(
+                        T::RelayCurrency::get(),
+                        &Self::vault_account_id(crowdloan),
+                        amount,
+                    )?;
+                    Self::do_migrate_pending(&who, &mut vault, amount)?;
+                    Vaults::<T>::insert(crowdloan, vault.id, vault);
                 }
+                XcmInflightRequest::Contribute {
+                    crowdloan: index,
+                    who,
+                    amount,
+                } if !executed => {
+                    // refund
+                    T::Assets::transfer(
+                        T::RelayCurrency::get(),
+                        &Self::vault_account_id(index),
+                        &who,
+                        amount,
+                        true,
+                    )?;
+                }
+                XcmInflightRequest::Withdraw {
+                    crowdloan,
+                    amount,
+                    target_phase,
+                } => {
+                    let mut vault =
+                        Self::current_vault(crowdloan).ok_or(Error::<T>::VaultDoesNotExist)?;
+                    T::Assets::mint_into(
+                        T::RelayCurrency::get(),
+                        &Self::vault_account_id(crowdloan),
+                        amount,
+                    )?;
+                    vault.phase = target_phase;
+                    Vaults::<T>::insert(crowdloan, vault.id, vault);
+                }
+                _ => {}
+            }
 
-                vault_contents
-                    .contribution_strategy
-                    .contribute::<T>(crowdloan, amount)?;
+            if executed {
+                XcmInflight::<T>::remove(&query_id);
+            }
 
-                // 4. Set vault.contributed to total_issuance(vault.currency_shares)
-                vault_contents.contributed = vault_ctoken_issuance;
+            Ok(())
+        }
 
-                // Emit event of trade with rate calculated
-                Self::deposit_event(Event::<T>::VaultParticipated(crowdloan, amount));
-
-                Ok(())
+        #[require_transactional]
+        fn try_mutate_vault<F>(crowdloan: ParaId, phase: VaultPhase, cb: F) -> DispatchResult
+        where
+            F: FnOnce(&mut Vault<T>) -> DispatchResult,
+        {
+            let index = Self::current_index(crowdloan).ok_or(Error::<T>::VaultDoesNotExist)?;
+            Vaults::<T>::try_mutate(crowdloan, index, |vault| {
+                let vault = vault.as_mut().ok_or(Error::<T>::VaultDoesNotExist)?;
+                ensure!(vault.phase == phase, Error::<T>::IncorrectVaultPhase);
+                cb(vault)
             })
         }
 
-        fn vault(crowdloan: ParaId) -> Result<Vault<T>, DispatchError> {
-            Vaults::<T>::try_get(crowdloan).map_err(|_err| Error::<T>::VaultDoesNotExist.into())
+        fn id_from_index(index: TrieIndex, pending: bool) -> child::ChildInfo {
+            let mut buf = Vec::new();
+            buf.extend_from_slice({
+                if pending {
+                    b"crowdloan:pending"
+                } else {
+                    b"crowdloan"
+                }
+            });
+            buf.extend_from_slice(&index.encode()[..]);
+            child::ChildInfo::new_default(T::Hashing::hash(&buf[..]).as_ref())
         }
 
-        fn active_crowdloans() -> Vec<ParaId> {
-            Vaults::<T>::iter()
-                .filter(|(_, vault)| vault.phase == VaultPhase::CollectingContributions)
-                .map(|(para_id, _)| para_id)
-                .collect()
+        fn contribution_put(
+            index: TrieIndex,
+            who: &T::AccountId,
+            balance: &BalanceOf<T>,
+            pending: bool,
+        ) {
+            who.using_encoded(|b| {
+                child::put(
+                    &Self::id_from_index(index, pending),
+                    b,
+                    &(balance, &Vec::<u8>::new()),
+                )
+            });
         }
 
-        pub(crate) fn ump_transact(
-            call: DoubleEncoded<()>,
-            weight: Weight,
-        ) -> Result<Xcm<()>, DispatchError> {
-            let fees = Self::xcm_fees_compensation();
-            let account_id = Self::account_id();
-            let relay_currency = T::RelayCurrency::get();
-            let asset: MultiAsset = (MultiLocation::here(), fees).into();
+        fn contribution_get(
+            index: TrieIndex,
+            who: &T::AccountId,
+            pending: bool,
+        ) -> (BalanceOf<T>, Vec<u8>) {
+            who.using_encoded(|b| {
+                child::get_or_default::<(BalanceOf<T>, Vec<u8>)>(
+                    &Self::id_from_index(index, pending),
+                    b,
+                )
+            })
+        }
 
-            T::Assets::burn_from(relay_currency, &account_id, fees)?;
+        fn contribution_kill(index: TrieIndex, who: &T::AccountId, pending: bool) {
+            who.using_encoded(|b| child::kill(&Self::id_from_index(index, pending), b));
+        }
 
-            TotalReserves::<T>::try_mutate(|b| -> DispatchResult {
-                *b = b.checked_sub(fees).ok_or(ArithmeticError::Underflow)?;
-                Ok(())
-            })?;
+        fn contribution_iterator(
+            index: TrieIndex,
+            pending: bool,
+        ) -> ChildTriePrefixIterator<(T::AccountId, (BalanceOf<T>, Vec<u8>))> {
+            ChildTriePrefixIterator::<_>::with_prefix_over_key::<Identity>(
+                &Self::id_from_index(index, pending),
+                &[],
+            )
+        }
 
-            Ok(Xcm(vec![
-                WithdrawAsset(MultiAssets::from(asset.clone())),
-                BuyExecution {
-                    fees: asset.clone(),
-                    weight_limit: Unlimited,
+        #[require_transactional]
+        fn do_contribute(
+            who: &AccountIdOf<T>,
+            crowdloan: ParaId,
+            amount: BalanceOf<T>,
+        ) -> Result<(), DispatchError> {
+            let query_id = T::XCM::do_contribute(
+                crowdloan,
+                T::AccountIdToMultiLocation::convert(T::RefundLocation::get()),
+                T::RelayCurrency::get(),
+                amount,
+                who,
+                Self::notify_placeholder(),
+            )?;
+
+            XcmInflight::<T>::insert(
+                query_id,
+                XcmInflightRequest::Contribute {
+                    crowdloan,
+                    who: who.clone(),
+                    amount,
                 },
-                Transact {
-                    origin_type: OriginKind::SovereignAccount,
-                    require_weight_at_most: weight,
-                    call,
+            );
+
+            Ok(())
+        }
+
+        #[require_transactional]
+        fn do_withdraw(
+            crowdloan: ParaId,
+            amount: BalanceOf<T>,
+            target_phase: VaultPhase,
+        ) -> Result<(), DispatchError> {
+            log::trace!(
+                target: "crowdloans::do_withdraw",
+                "para_id: {:?}, amount: {:?}",
+                &crowdloan,
+                &amount,
+            );
+
+            let query_id = T::XCM::do_withdraw(
+                crowdloan,
+                T::AccountIdToMultiLocation::convert(T::RefundLocation::get()),
+                T::RelayCurrency::get(),
+                Self::para_account_id(),
+                Self::notify_placeholder(),
+            )?;
+
+            XcmInflight::<T>::insert(
+                query_id,
+                XcmInflightRequest::Withdraw {
+                    crowdloan,
+                    amount,
+                    target_phase,
                 },
-                RefundSurplus,
-                DepositAsset {
-                    assets: asset.into(),
-                    max_assets: 1,
-                    beneficiary: T::AccountIdToMultiLocation::convert(Self::para_account_id()),
-                },
-            ]))
+            );
+
+            Ok(())
         }
     }
 }

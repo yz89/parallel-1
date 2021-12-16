@@ -2,7 +2,7 @@
 authors = ['Parallel Team']
 edition = '2018'
 name    = 'pallet-liquid-staking'
-version = '1.7.2'
+version = '1.7.5'
 
 [package.metadata.docs.rs]
 targets = ['x86_64-unknown-linux-gnu']
@@ -28,12 +28,12 @@ pallet-balances  = { git = 'https://github.com/paritytech/substrate.git', branch
 pallet-session   = { git = 'https://github.com/paritytech/substrate.git', branch = 'polkadot-v0.9.12' }
 pallet-staking   = { git = 'https://github.com/paritytech/substrate.git', branch = 'polkadot-v0.9.12' }
 pallet-timestamp = { git = 'https://github.com/paritytech/substrate.git', branch = 'polkadot-v0.9.12' }
+pallet-xcm       = { git = 'https://github.com/paritytech/polkadot.git', branch = 'release-v0.9.12' }
 serde            = { version = '1' }
 sp-core          = { git = 'https://github.com/paritytech/substrate.git', branch = 'polkadot-v0.9.12' }
 sp-io            = { git = 'https://github.com/paritytech/substrate.git', branch = 'polkadot-v0.9.12' }
 
 kusama-runtime              = { git = 'https://github.com/paritytech/polkadot.git', branch = 'release-v0.9.12', features = ['runtime-benchmarks'] }
-pallet-xcm                  = { git = 'https://github.com/paritytech/polkadot.git', branch = 'release-v0.9.12' }
 polkadot-core-primitives    = { git = 'https://github.com/paritytech/polkadot.git', branch = 'release-v0.9.12' }
 polkadot-parachain          = { git = 'https://github.com/paritytech/polkadot.git', branch = 'release-v0.9.12' }
 polkadot-runtime-parachains = { git = 'https://github.com/paritytech/polkadot.git', branch = 'release-v0.9.12' }
@@ -67,3 +67,6 @@ std                = [
   'scale-info/std',
 ]
 try-runtime        = ['frame-support/try-runtime']
+
+[lib]
+doctest = false
