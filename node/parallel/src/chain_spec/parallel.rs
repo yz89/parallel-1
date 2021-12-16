@@ -299,6 +299,5 @@ fn parallel_genesis(
         polkadot_xcm: PolkadotXcmConfig {
             safe_xcm_version: Some(2),
         },
-        crowdloans: Default::default(),
     }
 }
