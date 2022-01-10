@@ -6,16 +6,17 @@ use frame_support::{
     weights::constants::WEIGHT_PER_SECOND,
     PalletId,
 };
-use frame_system::{pallet_prelude::BlockNumberFor, EnsureOneOf, EnsureRoot, EnsureSignedBy};
+use frame_system::EnsureRoot;
 use orml_xcm_support::IsNativeConcrete;
 use pallet_xcm::XcmPassthrough;
 use polkadot_parachain::primitives::Sibling;
-use polkadot_runtime_parachains::configuration::HostConfiguration;
-use primitives::{currency::MultiCurrencyAdapter, tokens::*, Balance, ParaId, Rate, Ratio};
+use primitives::{currency::MultiCurrencyAdapter, tokens::*, Balance, ParaId};
 use sp_core::H256;
 use sp_runtime::{
-    testing::Header,
-    traits::{AccountIdConversion, AccountIdLookup, BlakeTwo256, Convert, One, Zero},
+    generic,
+    traits::{
+        AccountIdConversion, AccountIdLookup, BlakeTwo256, BlockNumberProvider, Convert, Zero,
+    },
     AccountId32,
     MultiAddress::Id,
 };
@@ -34,6 +35,21 @@ use xcm_simulator::{decl_test_network, decl_test_parachain, decl_test_relay_chai
 pub type AccountId = AccountId32;
 pub type CurrencyId = u32;
 pub use kusama_runtime;
+
+pub struct RelayChainBlockNumberProvider<T>(sp_std::marker::PhantomData<T>);
+
+impl<T: cumulus_pallet_parachain_system::Config> BlockNumberProvider
+    for RelayChainBlockNumberProvider<T>
+{
+    type BlockNumber = primitives::BlockNumber;
+
+    fn current_block_number() -> Self::BlockNumber {
+        cumulus_pallet_parachain_system::Pallet::<T>::validation_data()
+            .map(|d| d.relay_parent_number)
+            .unwrap_or_default()
+            .into()
+    }
+}
 
 parameter_types! {
     pub const ReservedXcmpWeight: Weight = WEIGHT_PER_SECOND / 4;
@@ -54,8 +70,8 @@ impl cumulus_pallet_parachain_system::Config for Test {
 impl parachain_info::Config for Test {}
 
 parameter_types! {
-    pub DotLocation: MultiLocation = MultiLocation::parent();
     pub RelayNetwork: NetworkId = NetworkId::Kusama;
+    pub RelayCurrency: CurrencyId = DOT;
     pub RelayChainOrigin: Origin = cumulus_pallet_xcm::Origin::Relay.into();
     pub Ancestry: MultiLocation = Parachain(ParachainInfo::parachain_id().into()).into();
 }
@@ -153,9 +169,10 @@ impl pallet_xcm::Config for Test {
     type SendXcmOrigin = EnsureXcmOrigin<Origin, LocalOriginToLocation>;
     type XcmRouter = XcmRouter;
     type ExecuteXcmOrigin = EnsureXcmOrigin<Origin, LocalOriginToLocation>;
-    type XcmExecuteFilter = Everything;
+    type XcmExecuteFilter = Nothing;
     type XcmExecutor = XcmExecutor<XcmConfig>;
     type XcmTeleportFilter = Nothing;
+
     type XcmReserveTransferFilter = Everything;
     type Weigher = FixedWeightBounds<UnitWeightCost, Call, MaxInstructions>;
     type LocationInverter = LocationInverter<Ancestry>;
@@ -166,12 +183,12 @@ pub struct CurrencyIdConvert;
 impl Convert<CurrencyId, Option<MultiLocation>> for CurrencyIdConvert {
     fn convert(id: CurrencyId) -> Option<MultiLocation> {
         match id {
-            KSM => Some(MultiLocation::parent()),
-            XKSM => Some(MultiLocation::new(
+            DOT => Some(MultiLocation::parent()),
+            XDOT => Some(MultiLocation::new(
                 1,
                 X2(
                     Parachain(ParachainInfo::parachain_id().into()),
-                    GeneralKey(b"xKSM".to_vec()),
+                    GeneralKey(b"xDOT".to_vec()),
                 ),
             )),
             _ => None,
@@ -185,12 +202,12 @@ impl Convert<MultiLocation, Option<CurrencyId>> for CurrencyIdConvert {
             MultiLocation {
                 parents: 1,
                 interior: Here,
-            } => Some(KSM),
+            } => Some(DOT),
             MultiLocation {
                 parents: 1,
                 interior: X2(Parachain(id), GeneralKey(key)),
-            } if ParaId::from(id) == ParachainInfo::parachain_id() && key == b"xKSM".to_vec() => {
-                Some(XKSM)
+            } if ParaId::from(id) == ParachainInfo::parachain_id() && key == b"xDOT".to_vec() => {
+                Some(XDOT)
             }
             _ => None,
         }
@@ -214,11 +231,10 @@ impl Convert<MultiAsset, Option<CurrencyId>> for CurrencyIdConvert {
 pub struct AccountIdToMultiLocation;
 impl Convert<AccountId, MultiLocation> for AccountIdToMultiLocation {
     fn convert(account_id: AccountId) -> MultiLocation {
-        X1(Junction::AccountId32 {
+        MultiLocation::from(Junction::AccountId32 {
             network: NetworkId::Any,
             id: account_id.into(),
         })
-        .into()
     }
 }
 
@@ -228,26 +244,14 @@ parameter_types! {
     pub const MaxInstructions: u32 = 100;
 }
 
-impl orml_xtokens::Config for Test {
-    type Event = Event;
-    type Balance = Balance;
-    type CurrencyId = CurrencyId;
-    type CurrencyIdConvert = CurrencyIdConvert;
-    type AccountIdToMultiLocation = AccountIdToMultiLocation;
-    type SelfLocation = SelfLocation;
-    type XcmExecutor = XcmExecutor<XcmConfig>;
-    type Weigher = FixedWeightBounds<UnitWeightCost, Call, MaxInstructions>;
-    type BaseXcmWeight = BaseXcmWeight;
-    type LocationInverter = LocationInverter<Ancestry>;
-}
-
 type UncheckedExtrinsic = frame_system::mocking::MockUncheckedExtrinsic<Test>;
 type Block = frame_system::mocking::MockBlock<Test>;
-type BlockNumber = u64;
-pub const KSM_DECIMAL: u128 = 10u128.pow(12);
+type BlockNumber = u32;
+type Index = u32;
+pub const DOT_DECIMAL: u128 = 10u128.pow(10);
 
 parameter_types! {
-    pub const BlockHashCount: u64 = 250;
+    pub const BlockHashCount: u32 = 250;
     pub const SS58Prefix: u8 = 42;
 }
 
@@ -258,13 +262,13 @@ impl frame_system::Config for Test {
     type DbWeight = ();
     type Origin = Origin;
     type Call = Call;
-    type Index = u64;
+    type Index = Index;
     type BlockNumber = BlockNumber;
     type Hash = H256;
     type Hashing = BlakeTwo256;
     type AccountId = AccountId;
     type Lookup = AccountIdLookup<AccountId, ()>;
-    type Header = Header;
+    type Header = generic::Header<BlockNumber, BlakeTwo256>;
     type Event = Event;
     type BlockHashCount = BlockHashCount;
     type Version = ();
@@ -308,25 +312,13 @@ impl SortedMembers<AccountId> for BobOrigin {
     }
 }
 
-pub type RelayOrigin =
-    EnsureOneOf<AccountId, EnsureRoot<AccountId>, EnsureSignedBy<AliceOrigin, AccountId>>;
-pub type UpdateOrigin =
-    EnsureOneOf<AccountId, EnsureRoot<AccountId>, EnsureSignedBy<BobOrigin, AccountId>>;
-
 parameter_types! {
-    pub const StakingPalletId: PalletId = PalletId(*b"par/lqsk");
-    pub const DerivativeIndex: u16 = 0;
-    pub const UnstakeQueueCapacity: u32 = 1000;
+    pub const CrowdloansPalletId: PalletId = PalletId(*b"crwloans");
+    pub const MaxVrfs: u32 = 10;
+    pub const MinContribution: Balance = 0;
+    pub const MigrateKeysLimit: u32 = 10;
     pub SelfParaId: ParaId = para_a_id();
-    pub const MinStakeAmount: Balance = 0;
-    pub const MinUnstakeAmount: Balance = 0;
-}
-
-impl pallet_utility::Config for Test {
-    type Event = Event;
-    type Call = Call;
-    type PalletsOrigin = OriginCaller;
-    type WeightInfo = pallet_utility::weights::SubstrateWeight<Test>;
+    pub RefundLocation: AccountId = para_a_id().into_account();
 }
 
 parameter_types! {
@@ -334,9 +326,9 @@ parameter_types! {
     pub const NotifyTimeout: BlockNumber = 100;
 }
 
-impl pallet_xcm_helper::Config for Test {
+impl crate::Config for Test {
     type Event = Event;
-    type UpdateOrigin = UpdateOrigin;
+    type UpdateOrigin = EnsureRoot<AccountId>;
     type Assets = Assets;
     type XcmSender = XcmRouter;
     type PalletId = XcmHelperPalletId;
@@ -347,30 +339,7 @@ impl pallet_xcm_helper::Config for Test {
 }
 
 parameter_types! {
-    pub const StakingCurrency: CurrencyId = KSM;
-    pub const LiquidCurrency: CurrencyId = XKSM;
-}
-
-impl crate::Config for Test {
-    type Event = Event;
-    type UpdateOrigin = UpdateOrigin;
-    type PalletId = StakingPalletId;
-    type SelfParaId = SelfParaId;
-    type WeightInfo = ();
-    type StakingCurrency = StakingCurrency;
-    type LiquidCurrency = LiquidCurrency;
-    type DerivativeIndex = DerivativeIndex;
-    type AccountIdToMultiLocation = AccountIdToMultiLocation;
-    type Assets = Assets;
-    type RelayOrigin = RelayOrigin;
-    type UnstakeQueueCapacity = UnstakeQueueCapacity;
-    type MinStakeAmount = MinStakeAmount;
-    type MinUnstakeAmount = MinUnstakeAmount;
-    type XCM = XcmHelper;
-}
-
-parameter_types! {
-    pub const AssetDeposit: Balance = KSM_DECIMAL;
+    pub const AssetDeposit: Balance = DOT_DECIMAL;
     pub const ApprovalDeposit: Balance = 0;
     pub const AssetsStringLimit: u32 = 50;
     pub const MetadataDepositBase: Balance = 0;
@@ -401,17 +370,14 @@ construct_runtime!(
     {
         System: frame_system::{Pallet, Call, Config, Storage, Event<T>},
         Balances: pallet_balances::{Pallet, Call, Storage, Event<T>},
-        Utility: pallet_utility::{Pallet, Call, Event},
         Assets: pallet_assets::{Pallet, Call, Storage, Event<T>},
-        LiquidStaking: crate::{Pallet, Storage, Call, Event<T>},
         ParachainSystem: cumulus_pallet_parachain_system::{Pallet, Call, Config, Storage, Inherent, Event<T>},
         ParachainInfo: parachain_info::{Pallet, Storage, Config},
         XcmpQueue: cumulus_pallet_xcmp_queue::{Pallet, Call, Storage, Event<T>},
         DmpQueue: cumulus_pallet_dmp_queue::{Pallet, Call, Storage, Event<T>},
         CumulusXcm: cumulus_pallet_xcm::{Pallet, Event<T>, Origin},
         PolkadotXcm: pallet_xcm::{Pallet, Call, Event<T>, Origin},
-        XcmHelper: pallet_xcm_helper::{Pallet, Storage, Call, Event<T>},
-        XTokens: orml_xtokens::{Pallet, Storage, Call, Event<T>},
+        XcmHelpers: crate::{Pallet, Storage, Call, Event<T>},
     }
 );
 
@@ -419,47 +385,24 @@ pub const ALICE: AccountId32 = AccountId32::new([1u8; 32]);
 pub const BOB: AccountId32 = AccountId32::new([2u8; 32]);
 
 pub(crate) fn new_test_ext() -> sp_io::TestExternalities {
-    let mut t = frame_system::GenesisConfig::default()
+    let t = frame_system::GenesisConfig::default()
         .build_storage::<Test>()
         .unwrap();
 
-    GenesisBuild::<Test>::assimilate_storage(
-        &crate::GenesisConfig {
-            exchange_rate: Rate::one(),
-            reserve_factor: Ratio::from_perthousand(5),
-        },
-        &mut t,
-    )
-    .unwrap();
-
     let mut ext = sp_io::TestExternalities::new(t);
     ext.execute_with(|| {
-        Assets::force_create(Origin::root(), KSM, Id(ALICE), true, 1).unwrap();
-        Assets::force_set_metadata(
-            Origin::root(),
-            KSM,
-            b"Kusama".to_vec(),
-            b"KSM".to_vec(),
-            12,
-            false,
+        Assets::force_create(Origin::root(), DOT, Id(ALICE), true, 1).unwrap();
+        Assets::force_create(Origin::root(), XDOT, Id(ALICE), true, 1).unwrap();
+        Assets::mint(Origin::signed(ALICE), DOT, Id(ALICE), 100 * DOT_DECIMAL).unwrap();
+        Assets::mint(Origin::signed(ALICE), XDOT, Id(ALICE), 100 * DOT_DECIMAL).unwrap();
+        Assets::mint(
+            Origin::signed(ALICE),
+            DOT,
+            Id(XcmHelpers::account_id()),
+            dot(30f64),
         )
         .unwrap();
-        Assets::force_create(Origin::root(), XKSM, Id(ALICE), true, 1).unwrap();
-        Assets::force_set_metadata(
-            Origin::root(),
-            XKSM,
-            b"Parallel Kusama".to_vec(),
-            b"XKSM".to_vec(),
-            12,
-            false,
-        )
-        .unwrap();
-        Assets::mint(Origin::signed(ALICE), KSM, Id(ALICE), 100 * KSM_DECIMAL).unwrap();
-        Assets::mint(Origin::signed(ALICE), XKSM, Id(ALICE), 100 * KSM_DECIMAL).unwrap();
-        Assets::mint(Origin::signed(ALICE), KSM, Id(BOB), ksm(20000f64)).unwrap();
-
-        LiquidStaking::update_staking_pool_capacity(Origin::signed(BOB), ksm(10000f64)).unwrap();
-        XcmHelper::update_xcm_fees(Origin::signed(BOB), ksm(10f64)).unwrap();
+        XcmHelpers::update_xcm_fees(Origin::root(), dot(10f64)).unwrap();
     });
 
     ext
@@ -492,61 +435,8 @@ decl_test_network! {
     }
 }
 
-pub type KusamaRuntime = kusama_runtime::Runtime;
-pub type RelayBalances = pallet_balances::Pallet<KusamaRuntime>;
-pub type RelayStaking = pallet_staking::Pallet<KusamaRuntime>;
-pub type RelayStakingEvent = pallet_staking::Event<KusamaRuntime>;
-pub type RelaySystem = frame_system::Pallet<KusamaRuntime>;
-pub type RelayEvent = kusama_runtime::Event;
-pub type ParaSystem = frame_system::Pallet<Test>;
-
 pub fn para_a_id() -> ParaId {
     ParaId::from(1)
-}
-
-fn default_parachains_host_configuration() -> HostConfiguration<BlockNumberFor<KusamaRuntime>> {
-    HostConfiguration {
-        max_code_size: 3145728,
-        max_head_data_size: 32768,
-        max_upward_queue_count: 8,
-        max_upward_queue_size: 1048576,
-        max_upward_message_size: 1048576,
-        max_upward_message_num_per_candidate: 5,
-        hrmp_max_message_num_per_candidate: 5,
-        validation_upgrade_frequency: 1,
-        validation_upgrade_delay: 1,
-        max_pov_size: 5242880,
-        max_downward_message_size: 1024,
-        ump_service_total_weight: 100_000_000_000,
-        hrmp_max_parachain_outbound_channels: 4,
-        hrmp_max_parathread_outbound_channels: 4,
-        hrmp_sender_deposit: 0,
-        hrmp_recipient_deposit: 0,
-        hrmp_channel_max_capacity: 8,
-        hrmp_channel_max_total_size: 8192,
-        hrmp_max_parachain_inbound_channels: 4,
-        hrmp_max_parathread_inbound_channels: 4,
-        hrmp_channel_max_message_size: 1048576,
-        code_retention_period: 1200,
-        parathread_cores: 0,
-        parathread_retries: 0,
-        group_rotation_frequency: 20,
-        chain_availability_period: 4,
-        thread_availability_period: 4,
-        scheduling_lookahead: 0,
-        max_validators_per_core: None,
-        max_validators: None,
-        dispute_period: 6,
-        dispute_post_conclusion_acceptance_period: 100,
-        dispute_max_spam_slots: 2,
-        dispute_conclusion_by_time_out_period: 200,
-        no_show_slots: 2,
-        n_delay_tranches: 25,
-        zeroth_delay_tranche_width: 0,
-        needed_approvals: 2,
-        relay_vrf_modulo_samples: 2,
-        ump_max_individual_weight: 20000000000,
-    }
 }
 
 pub fn para_ext(para_id: u32) -> sp_io::TestExternalities {
@@ -563,42 +453,21 @@ pub fn para_ext(para_id: u32) -> sp_io::TestExternalities {
     )
     .unwrap();
 
-    GenesisBuild::<Test>::assimilate_storage(
-        &crate::GenesisConfig {
-            exchange_rate: Rate::one(),
-            reserve_factor: Ratio::from_perthousand(5),
-        },
-        &mut t,
-    )
-    .unwrap();
-
     let mut ext = sp_io::TestExternalities::new(t);
     ext.execute_with(|| {
         System::set_block_number(1);
-        Assets::force_create(Origin::root(), KSM, Id(ALICE), true, 1).unwrap();
-        Assets::force_set_metadata(
-            Origin::root(),
-            KSM,
-            b"Kusama".to_vec(),
-            b"KSM".to_vec(),
-            12,
-            false,
+        Assets::force_create(Origin::root(), DOT, Id(ALICE), true, 1).unwrap();
+        Assets::force_create(Origin::root(), XDOT, Id(ALICE), true, 1).unwrap();
+        Assets::mint(Origin::signed(ALICE), DOT, Id(ALICE), 100 * DOT_DECIMAL).unwrap();
+        Assets::mint(Origin::signed(ALICE), XDOT, Id(ALICE), 100 * DOT_DECIMAL).unwrap();
+        Assets::mint(
+            Origin::signed(ALICE),
+            DOT,
+            Id(XcmHelpers::account_id()),
+            dot(30f64),
         )
         .unwrap();
-        Assets::force_create(Origin::root(), XKSM, Id(ALICE), true, 1).unwrap();
-        Assets::force_set_metadata(
-            Origin::root(),
-            XKSM,
-            b"Parallel Kusama".to_vec(),
-            b"XKSM".to_vec(),
-            12,
-            false,
-        )
-        .unwrap();
-        Assets::mint(Origin::signed(ALICE), KSM, Id(ALICE), 10000 * KSM_DECIMAL).unwrap();
-
-        LiquidStaking::update_staking_pool_capacity(Origin::signed(BOB), ksm(10000f64)).unwrap();
-        XcmHelper::update_xcm_fees(Origin::signed(BOB), ksm(10f64)).unwrap();
+        XcmHelpers::update_xcm_fees(Origin::root(), dot(10f64)).unwrap();
     });
 
     ext
@@ -612,15 +481,9 @@ pub fn relay_ext() -> sp_io::TestExternalities {
 
     pallet_balances::GenesisConfig::<Runtime> {
         balances: vec![
-            (ALICE, 100 * KSM_DECIMAL),
-            (para_a_id().into_account(), 1_000_000 * KSM_DECIMAL),
+            (ALICE, 100 * DOT_DECIMAL),
+            (para_a_id().into_account(), 1_000_000 * DOT_DECIMAL),
         ],
-    }
-    .assimilate_storage(&mut t)
-    .unwrap();
-
-    polkadot_runtime_parachains::configuration::GenesisConfig::<Runtime> {
-        config: default_parachains_host_configuration(),
     }
     .assimilate_storage(&mut t)
     .unwrap();
@@ -630,6 +493,6 @@ pub fn relay_ext() -> sp_io::TestExternalities {
     ext
 }
 
-pub fn ksm(n: f64) -> Balance {
-    ((n * 1000000f64) as u128) * KSM_DECIMAL / 1000000u128
+pub fn dot(n: f64) -> Balance {
+    ((n * 1000000f64) as u128) * DOT_DECIMAL / 1000000u128
 }

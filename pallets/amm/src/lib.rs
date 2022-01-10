@@ -40,8 +40,6 @@ use frame_support::{
     transactional, Blake2_128Concat, PalletId, Twox64Concat,
 };
 use frame_system::{ensure_signed, pallet_prelude::OriginFor};
-pub use pallet::*;
-use primitives::{Balance, CurrencyId, Rate};
 use scale_info::TypeInfo;
 #[cfg(feature = "std")]
 use serde::{Deserialize, Serialize};
@@ -49,6 +47,10 @@ use sp_runtime::{
     traits::{AccountIdConversion, CheckedDiv, IntegerSquareRoot, One, Zero},
     ArithmeticError, DispatchError, FixedU128, Perbill, SaturatedConversion,
 };
+
+pub use pallet::*;
+
+use primitives::{Balance, CurrencyId, Rate};
 pub use weights::WeightInfo;
 
 pub type AssetIdOf<T, I = ()> =
@@ -125,7 +127,7 @@ pub mod pallet {
         LiquidityRemoved(T::AccountId, AssetIdOf<T, I>, AssetIdOf<T, I>),
         /// Trade using liquidity
         /// [trader, currency_id_in, currency_id_out, rate_out_for_in]
-        Trade(T::AccountId, AssetIdOf<T, I>, AssetIdOf<T, I>, Rate),
+        Traded(T::AccountId, AssetIdOf<T, I>, AssetIdOf<T, I>, Rate),
     }
 
     #[pallet::hooks]
@@ -602,7 +604,7 @@ impl<T: Config<I>, I: 'static> primitives::AMM<T, AssetIdOf<T, I>, BalanceOf<T, 
                 )?;
 
                 // Emit event of trade with rate calculated
-                Self::deposit_event(Event::<T, I>::Trade(
+                Self::deposit_event(Event::<T, I>::Traded(
                     who.clone(),
                     base_asset,
                     quote_asset,

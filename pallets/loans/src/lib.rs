@@ -153,6 +153,12 @@ pub mod pallet {
         ExceededMarketCapacity,
         /// Insufficient cash in the pool
         InsufficientCash,
+        /// The factor should be bigger than 0% and smaller than 100%
+        InvalidFactor,
+        /// The cap cannot be zero
+        ZeroCap,
+        /// Payer cannot be signer
+        PayerIsSigner,
     }
 
     #[pallet::event]
@@ -403,6 +409,15 @@ pub mod pallet {
                 market.rate_model.check_model(),
                 Error::<T>::InvalidRateModelParam
             );
+            ensure!(
+                market.collateral_factor > Ratio::zero() && market.collateral_factor < Ratio::one(),
+                Error::<T>::InvalidFactor,
+            );
+            ensure!(
+                market.reserve_factor > Ratio::zero() && market.reserve_factor < Ratio::one(),
+                Error::<T>::InvalidFactor,
+            );
+            ensure!(market.cap > Zero::zero(), Error::<T>::ZeroCap,);
 
             // Ensures a given `ptoken_id` not exists on the `Market` and `UnderlyingAssetId`.
             Self::ensure_ptoken(market.ptoken_id)?;
@@ -481,9 +496,20 @@ pub mod pallet {
             reserve_factor: Ratio,
             close_factor: Ratio,
             liquidate_incentive: Rate,
-            cap: Balance,
+            #[pallet::compact] cap: BalanceOf<T>,
         ) -> DispatchResultWithPostInfo {
             T::UpdateOrigin::ensure_origin(origin)?;
+
+            ensure!(
+                collateral_factor > Ratio::zero() && collateral_factor < Ratio::one(),
+                Error::<T>::InvalidFactor
+            );
+            ensure!(
+                reserve_factor > Ratio::zero() && reserve_factor < Ratio::one(),
+                Error::<T>::InvalidFactor
+            );
+            ensure!(cap > Zero::zero(), Error::<T>::ZeroCap);
+
             let market = Self::mutate_market(asset_id, |stored_market| {
                 *stored_market = Market {
                     state: stored_market.state,
@@ -537,7 +563,7 @@ pub mod pallet {
         pub fn mint(
             origin: OriginFor<T>,
             asset_id: AssetIdOf<T>,
-            mint_amount: BalanceOf<T>,
+            #[pallet::compact] mint_amount: BalanceOf<T>,
         ) -> DispatchResultWithPostInfo {
             let who = ensure_signed(origin)?;
             Self::ensure_active_market(asset_id)?;
@@ -576,7 +602,7 @@ pub mod pallet {
         pub fn redeem(
             origin: OriginFor<T>,
             asset_id: AssetIdOf<T>,
-            redeem_amount: BalanceOf<T>,
+            #[pallet::compact] redeem_amount: BalanceOf<T>,
         ) -> DispatchResultWithPostInfo {
             let who = ensure_signed(origin)?;
             Self::ensure_active_market(asset_id)?;
@@ -623,7 +649,7 @@ pub mod pallet {
         pub fn borrow(
             origin: OriginFor<T>,
             asset_id: AssetIdOf<T>,
-            borrow_amount: BalanceOf<T>,
+            #[pallet::compact] borrow_amount: BalanceOf<T>,
         ) -> DispatchResultWithPostInfo {
             let who = ensure_signed(origin)?;
             Self::ensure_active_market(asset_id)?;
@@ -662,7 +688,7 @@ pub mod pallet {
         pub fn repay_borrow(
             origin: OriginFor<T>,
             asset_id: AssetIdOf<T>,
-            repay_amount: BalanceOf<T>,
+            #[pallet::compact] repay_amount: BalanceOf<T>,
         ) -> DispatchResultWithPostInfo {
             let who = ensure_signed(origin)?;
             Self::ensure_active_market(asset_id)?;
@@ -762,7 +788,7 @@ pub mod pallet {
             origin: OriginFor<T>,
             borrower: T::AccountId,
             liquidate_token: AssetIdOf<T>,
-            repay_amount: BalanceOf<T>,
+            #[pallet::compact] repay_amount: BalanceOf<T>,
             collateral_token: AssetIdOf<T>,
         ) -> DispatchResultWithPostInfo {
             let who = ensure_signed(origin)?;
@@ -790,7 +816,7 @@ pub mod pallet {
             origin: OriginFor<T>,
             payer: <T::Lookup as StaticLookup>::Source,
             asset_id: AssetIdOf<T>,
-            add_amount: BalanceOf<T>,
+            #[pallet::compact] add_amount: BalanceOf<T>,
         ) -> DispatchResultWithPostInfo {
             T::ReserveOrigin::ensure_origin(origin)?;
             let payer = T::Lookup::lookup(payer)?;
@@ -826,7 +852,7 @@ pub mod pallet {
             origin: OriginFor<T>,
             receiver: <T::Lookup as StaticLookup>::Source,
             asset_id: AssetIdOf<T>,
-            reduce_amount: BalanceOf<T>,
+            #[pallet::compact] reduce_amount: BalanceOf<T>,
         ) -> DispatchResultWithPostInfo {
             T::ReserveOrigin::ensure_origin(origin)?;
             let receiver = T::Lookup::lookup(receiver)?;
@@ -1310,11 +1336,10 @@ impl<T: Config> Pallet<T> {
 
     // Ensures a given `asset_id` is an active market.
     fn ensure_active_market(asset_id: AssetIdOf<T>) -> Result<Market<BalanceOf<T>>, DispatchError> {
-        if let Some((_, market)) = Self::active_markets().find(|(id, _)| id == &asset_id) {
-            Ok(market)
-        } else {
-            Err(<Error<T>>::MarketNotActivated.into())
-        }
+        Self::active_markets()
+            .find(|(id, _)| id == &asset_id)
+            .map(|(_, market)| market)
+            .ok_or_else(|| Error::<T>::MarketNotActivated.into())
     }
 
     /// Ensure market is enough to supply `amount` asset.

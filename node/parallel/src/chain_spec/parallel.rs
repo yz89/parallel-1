@@ -199,11 +199,11 @@ pub fn parallel_config(_id: ParaId) -> Result<ChainSpec, String> {
     //         )
     //     },
     //     vec![
-    //         "/dns/bootnode-0.parallel.fi/tcp/30333/p2p/12D3KooWNngQxhrT19QqK2dCPtCQb5kB92RscWMnPfNxCC1sgr3N".parse().unwrap(),
-    //         "/dns/bootnode-1.parallel.fi/tcp/30333/p2p/12D3KooWMzctxpmtti9dWsPaosh2cPCBZFUGeQhmT6W1ynErwKKB".parse().unwrap(),
-    //         "/dns/bootnode-2.parallel.fi/tcp/30333/p2p/12D3KooWAWRTCjiVo3VoSZYMCwKk6CQCSLTqVVjBnbWhvp71Ey6Y".parse().unwrap(),
-    //         "/dns/bootnode-3.parallel.fi/tcp/30333/p2p/12D3KooWSMKQCs6JXjVdaqBSyoMZLBNWrLjJ3QzTET7Zd7kWoB8G".parse().unwrap(),
-    //         "/dns/bootnode-4.parallel.fi/tcp/30333/p2p/12D3KooWCAhW29HjprkLmQ39gCTJmHsEWSqLXPkCz27qVbsGjpLk".parse().unwrap(),
+    //         "/dns/bootnode-0.parallel.fi/tcp/30333/p2p/12D3KooWQBJuhrsg8ayrFDW2hCcz3bGHx3tVkTeGUXS7e8D3TaEE".parse().unwrap(),
+    //         "/dns/bootnode-1.parallel.fi/tcp/30333/p2p/12D3KooWA3ngBk5UuAvtvANXRJSTjdCT9bz7AcdBqmnR64m3tRWb".parse().unwrap(),
+    //         "/dns/bootnode-2.parallel.fi/tcp/30333/p2p/12D3KooWRmZsTs77aMK5WR3VwqWPeQVnm8JgEKcX8EykcCBnibFu".parse().unwrap(),
+    //         "/dns/bootnode-3.parallel.fi/tcp/30333/p2p/12D3KooWDcN56Jwh96c4od3zc9RMSQciBASNd1vgiVfTZbCxxUKE".parse().unwrap(),
+    //         "/dns/bootnode-4.parallel.fi/tcp/30333/p2p/12D3KooWKh8KPixgUcxuhweCxnd8DpXGhigi4izLLf5g88KtDBs9".parse().unwrap(),
     //     ],
     //     TelemetryEndpoints::new(vec![(TELEMETRY_URL.into(), 0)]).ok(),
     //     Some("parallel"),
@@ -236,16 +236,14 @@ fn parallel_genesis(
             code: WASM_BINARY
                 .expect("WASM binary was not build, please build it!")
                 .to_vec(),
-            changes_trie_config: Default::default(),
         },
         balances: BalancesConfig {
-            balances: initial_allocation.clone(),
+            balances: initial_allocation,
         },
         collator_selection: CollatorSelectionConfig {
             invulnerables: invulnerables.iter().cloned().map(|(acc, _)| acc).collect(),
             candidacy_bond: Zero::zero(),
             desired_candidates: 16,
-            ..Default::default()
         },
         session: SessionConfig {
             keys: invulnerables
@@ -254,7 +252,7 @@ fn parallel_genesis(
                 .map(|(acc, aura)| {
                     (
                         acc.clone(),          // account id
-                        acc.clone(),          // validator id
+                        acc,                  // validator id
                         SessionKeys { aura }, // session keys
                     )
                 })
@@ -266,7 +264,7 @@ fn parallel_genesis(
         sudo: SudoConfig { key: root_key },
         parachain_info: ParachainInfoConfig { parachain_id: id },
         liquid_staking: LiquidStakingConfig {
-            exchange_rate: Rate::saturating_from_rational(100, 100), // 1
+            exchange_rate: Rate::saturating_from_rational(100_u32, 100_u32), // 1
             reserve_factor: Ratio::from_perthousand(5),
         },
         democracy: DemocracyConfig::default(),

@@ -30,7 +30,7 @@ use frame_support::{
     log, match_type,
     traits::{
         fungibles::{InspectMetadata, Mutate},
-        Contains, Everything, InstanceFilter, Nothing,
+        Contains, EqualPrivilegeOnly, Everything, InstanceFilter, Nothing,
     },
     PalletId,
 };
@@ -136,10 +136,10 @@ pub const VERSION: RuntimeVersion = RuntimeVersion {
     spec_name: create_runtime_str!("vanilla"),
     impl_name: create_runtime_str!("vanilla"),
     authoring_version: 1,
-    spec_version: 175,
-    impl_version: 20,
+    spec_version: 176,
+    impl_version: 21,
     apis: RUNTIME_API_VERSIONS,
-    transaction_version: 4,
+    transaction_version: 5,
 };
 
 // 1 in 4 blocks (on average, not counting collisions) will be primary babe blocks.
@@ -250,6 +250,7 @@ impl Contains<Call> for BaseCallFilter {
             Call::ValidatorFeedersMembership(_) |
             // AMM
             Call::AMM(_) |
+            Call::AMMRoute(_) |
             // Crowdloans
             Call::Crowdloans(_) |
             // Bridge
@@ -474,6 +475,8 @@ parameter_types! {
     pub const UnstakeQueueCapacity: u32 = 1000;
     pub const MinStakeAmount: Balance = 1_000_000_000_000;
     pub const MinUnstakeAmount: Balance = 500_000_000_000;
+    pub const StakingCurrency: CurrencyId = KSM;
+    pub const LiquidCurrency: CurrencyId = XKSM;
 }
 
 impl pallet_liquid_staking::Config for Runtime {
@@ -484,13 +487,14 @@ impl pallet_liquid_staking::Config for Runtime {
     type WeightInfo = ();
     type SelfParaId = ParachainInfo;
     type Assets = Assets;
-    type XcmSender = XcmRouter;
+    type StakingCurrency = StakingCurrency;
+    type LiquidCurrency = LiquidCurrency;
     type DerivativeIndex = DerivativeIndex;
     type AccountIdToMultiLocation = AccountIdToMultiLocation;
     type UnstakeQueueCapacity = UnstakeQueueCapacity;
-    type RelayNetwork = RelayNetwork;
     type MinStakeAmount = MinStakeAmount;
     type MinUnstakeAmount = MinUnstakeAmount;
+    type XCM = XcmHelper;
 }
 
 parameter_types! {
@@ -766,6 +770,7 @@ impl pallet_proxy::Config for Runtime {
 impl pallet_utility::Config for Runtime {
     type Event = Event;
     type Call = Call;
+    type PalletsOrigin = OriginCaller;
     type WeightInfo = pallet_utility::weights::SubstrateWeight<Runtime>;
 }
 
@@ -1236,6 +1241,7 @@ impl pallet_scheduler::Config for Runtime {
     type MaximumWeight = MaximumSchedulerWeight;
     type ScheduleOrigin = EnsureRoot<AccountId>;
     type MaxScheduledPerBlock = MaxScheduledPerBlock;
+    type OriginPrivilegeCmp = EqualPrivilegeOnly;
     type WeightInfo = pallet_scheduler::weights::SubstrateWeight<Runtime>;
 }
 
@@ -1354,7 +1360,7 @@ impl pallet_amm::Config for Runtime {
 
 parameter_types! {
     pub const CrowdloansPalletId: PalletId = PalletId(*b"crwloans");
-    pub const MinContribution: Balance = 110_000_000_000;
+    pub const MinContribution: Balance = 100_000_000_000;
     pub const MaxVrfs: u32 = 10;
     pub const MigrateKeysLimit: u32 = 10;
     pub RefundLocation: AccountId = Utility::derivative_account_id(ParachainInfo::parachain_id().into_account(), u16::MAX);
@@ -1387,7 +1393,6 @@ impl pallet_crowdloans::Config for Runtime {
     type MinContribution = MinContribution;
     type MaxVrfs = MaxVrfs;
     type MigrateKeysLimit = MigrateKeysLimit;
-    type UpdateOrigin = EnsureRootOrMoreThanHalfGeneralCouncil;
     type MigrateOrigin = EnsureRootOrMoreThanHalfGeneralCouncil;
     type VrfOrigin = EnsureRootOrMoreThanHalfGeneralCouncil;
     type CreateVaultOrigin = EnsureRootOrMoreThanHalfGeneralCouncil;
@@ -1406,12 +1411,15 @@ parameter_types! {
 }
 
 impl pallet_xcm_helper::Config for Runtime {
+    type Event = Event;
+    type UpdateOrigin = EnsureRootOrMoreThanHalfGeneralCouncil;
     type Assets = Assets;
     type XcmSender = XcmRouter;
     type RelayNetwork = RelayNetwork;
     type PalletId = XcmHelperPalletId;
     type NotifyTimeout = NotifyTimeout;
     type BlockNumberProvider = frame_system::Pallet<Runtime>;
+    type WeightInfo = pallet_xcm_helper::weights::SubstrateWeight<Runtime>;
 }
 parameter_types! {
     pub const MaxLengthRoute: u8 = 10;
@@ -1501,6 +1509,7 @@ impl Contains<Call> for WhiteListFilter {
         )
         // // AMM
         // Call::AMM(_) |
+        // Call::AMMRoute(_) |
         //
         // // Crowdloans
         // Call::Crowdloans(_) |
@@ -1590,7 +1599,7 @@ construct_runtime!(
         Bridge: pallet_bridge::{Pallet, Call, Storage, Event<T>} = 90,
         EmergencyShutdown: pallet_emergency_shutdown::{Pallet, Call, Event<T>} = 91,
         LiquidityMining: pallet_liquidity_mining::{Pallet, Call, Storage, Event<T>} = 92,
-        XcmHelper: pallet_xcm_helper::{Pallet} = 93,
+        XcmHelper: pallet_xcm_helper::{Pallet, Call, Storage, Event<T>} = 93,
     }
 );
 
@@ -1791,6 +1800,7 @@ impl_runtime_apis! {
             list_benchmark!(list, extra, pallet_router, AMMRoute);
             list_benchmark!(list, extra, pallet_liquidity_mining, LiquidityMining);
             list_benchmark!(list, extra, pallet_crowdloans, Crowdloans);
+            list_benchmark!(list, extra, pallet_xcm_helper, XcmHelper);
 
             let storage_info = AllPalletsWithSystem::storage_info();
 
@@ -1836,6 +1846,7 @@ impl_runtime_apis! {
             add_benchmark!(params, batches, pallet_router, AMMRoute);
             add_benchmark!(params, batches, pallet_liquidity_mining, LiquidityMining);
             add_benchmark!(params, batches, pallet_crowdloans, Crowdloans);
+            add_benchmark!(params, batches, pallet_xcm_helper, XcmHelper);
 
             if batches.is_empty() { return Err("Benchmark not found for this pallet.".into()) }
             Ok(batches)

@@ -13,7 +13,7 @@ use polkadot_parachain::primitives::Sibling;
 use primitives::{currency::MultiCurrencyAdapter, tokens::*, Balance, ParaId};
 use sp_core::H256;
 use sp_runtime::{
-    testing::Header,
+    generic,
     traits::{
         AccountIdConversion, AccountIdLookup, BlakeTwo256, BlockNumberProvider, Convert, Zero,
     },
@@ -140,6 +140,43 @@ impl Config for XcmConfig {
     type AssetClaims = PolkadotXcm;
 }
 
+type KusamaXcmOriginToCallOrigin = (
+    // A `Signed` origin of the sovereign account that the original location controls.
+    SovereignSignedViaLocation<kusama_runtime::SovereignAccountOf, kusama_runtime::Origin>,
+    // A child parachain, natively expressed, has the `Parachain` origin.
+    ChildParachainAsNative<polkadot_runtime_parachains::origin::Origin, kusama_runtime::Origin>,
+    // The AccountId32 location type can be expressed natively as a `Signed` origin.
+    SignedAccountId32AsNative<kusama_runtime::KusamaNetwork, kusama_runtime::Origin>,
+    // A system child parachain, expressed as a Superuser, converts to the `Root` origin.
+    ChildSystemParachainAsSuperuser<ParaId, kusama_runtime::Origin>,
+);
+
+pub type KusamaCall = kusama_runtime::Call;
+pub type KusamaLocalAssetTransactor = kusama_runtime::LocalAssetTransactor;
+// pub type KusamaXcmOriginToCallOrigin = kusama_runtime::LocalOriginConverter;
+// pub type KusamaLocationInverter = kusama_runtime::LocationInverter;
+pub type KusamaAncestry = kusama_runtime::Ancestry;
+pub type KusamaBarrier = kusama_runtime::Barrier;
+pub type KusamaXcmPallet = kusama_runtime::XcmPallet;
+
+pub struct RelayXcmConfig;
+impl Config for RelayXcmConfig {
+    type Call = KusamaCall;
+    type XcmSender = RelayChainXcmRouter;
+    type AssetTransactor = KusamaLocalAssetTransactor;
+    type OriginConverter = KusamaXcmOriginToCallOrigin;
+    type IsReserve = ();
+    type IsTeleporter = ();
+    type LocationInverter = LocationInverter<KusamaAncestry>;
+    type Barrier = KusamaBarrier;
+    type Weigher = FixedWeightBounds<UnitWeightCost, KusamaCall, MaxInstructions>;
+    type Trader = FixedRateOfFungible<DotPerSecond, ()>;
+    type ResponseHandler = KusamaXcmPallet;
+    type SubscriptionService = KusamaXcmPallet;
+    type AssetTrap = KusamaXcmPallet;
+    type AssetClaims = KusamaXcmPallet;
+}
+
 impl cumulus_pallet_xcmp_queue::Config for Test {
     type Event = Event;
     type XcmExecutor = XcmExecutor<XcmConfig>;
@@ -259,11 +296,12 @@ impl orml_xtokens::Config for Test {
 
 type UncheckedExtrinsic = frame_system::mocking::MockUncheckedExtrinsic<Test>;
 type Block = frame_system::mocking::MockBlock<Test>;
-type BlockNumber = u64;
+pub type BlockNumber = u32;
+type Index = u32;
 pub const DOT_DECIMAL: u128 = 10u128.pow(10);
 
 parameter_types! {
-    pub const BlockHashCount: u64 = 250;
+    pub const BlockHashCount: u32 = 250;
     pub const SS58Prefix: u8 = 42;
 }
 
@@ -274,13 +312,13 @@ impl frame_system::Config for Test {
     type DbWeight = ();
     type Origin = Origin;
     type Call = Call;
-    type Index = u64;
+    type Index = Index;
     type BlockNumber = BlockNumber;
     type Hash = H256;
     type Hashing = BlakeTwo256;
     type AccountId = AccountId;
     type Lookup = AccountIdLookup<AccountId, ()>;
-    type Header = Header;
+    type Header = generic::Header<BlockNumber, BlakeTwo256>;
     type Event = Event;
     type BlockHashCount = BlockHashCount;
     type Version = ();
@@ -364,7 +402,6 @@ impl crate::Config for Test {
     type MinContribution = MinContribution;
     type MaxVrfs = MaxVrfs;
     type MigrateKeysLimit = MigrateKeysLimit;
-    type UpdateOrigin = EnsureRoot<AccountId>;
     type MigrateOrigin = EnsureRoot<AccountId>;
     type CreateVaultOrigin = CreateVaultOrigin;
     type UpdateVaultOrigin = UpdateVaultOrigin;
@@ -383,12 +420,15 @@ parameter_types! {
 }
 
 impl pallet_xcm_helper::Config for Test {
+    type Event = Event;
+    type UpdateOrigin = EnsureRoot<AccountId>;
     type Assets = Assets;
     type XcmSender = XcmRouter;
     type PalletId = XcmHelperPalletId;
     type RelayNetwork = RelayNetwork;
     type NotifyTimeout = NotifyTimeout;
     type BlockNumberProvider = frame_system::Pallet<Test>;
+    type WeightInfo = ();
 }
 
 parameter_types! {
@@ -431,7 +471,7 @@ construct_runtime!(
         DmpQueue: cumulus_pallet_dmp_queue::{Pallet, Call, Storage, Event<T>},
         CumulusXcm: cumulus_pallet_xcm::{Pallet, Event<T>, Origin},
         PolkadotXcm: pallet_xcm::{Pallet, Call, Event<T>, Origin},
-        XcmHelper: pallet_xcm_helper::{Pallet},
+        XcmHelper: pallet_xcm_helper::{Pallet, Storage, Call, Event<T>},
         XTokens: orml_xtokens::{Pallet, Storage, Call, Event<T>},
     }
 );
@@ -448,8 +488,8 @@ pub(crate) fn new_test_ext() -> sp_io::TestExternalities {
     ext.execute_with(|| {
         Assets::force_create(Origin::root(), DOT, Id(ALICE), true, 1).unwrap();
         Assets::force_create(Origin::root(), XDOT, Id(ALICE), true, 1).unwrap();
-        Assets::mint(Origin::signed(ALICE), DOT, Id(ALICE), 100 * DOT_DECIMAL).unwrap();
-        Assets::mint(Origin::signed(ALICE), XDOT, Id(ALICE), 100 * DOT_DECIMAL).unwrap();
+        Assets::mint(Origin::signed(ALICE), DOT, Id(ALICE), dot(100f64)).unwrap();
+        Assets::mint(Origin::signed(ALICE), XDOT, Id(ALICE), dot(100f64)).unwrap();
         Assets::mint(
             Origin::signed(ALICE),
             DOT,
@@ -457,7 +497,7 @@ pub(crate) fn new_test_ext() -> sp_io::TestExternalities {
             dot(30f64),
         )
         .unwrap();
-        Crowdloans::update_xcm_fees(Origin::root(), dot(10f64)).unwrap();
+        XcmHelper::update_xcm_fees(Origin::root(), dot(10f64)).unwrap();
     });
 
     ext
@@ -476,7 +516,7 @@ decl_test_parachain! {
 decl_test_relay_chain! {
     pub struct Relay {
         Runtime = kusama_runtime::Runtime,
-        XcmConfig = kusama_runtime::XcmConfig,
+        XcmConfig = RelayXcmConfig,
         new_ext = relay_ext(),
     }
 }
@@ -490,8 +530,21 @@ decl_test_network! {
     }
 }
 
+pub type KusamaRuntime = kusama_runtime::Runtime;
+pub type RelayRegistrar = polkadot_runtime_common::paras_registrar::Pallet<KusamaRuntime>;
+pub type RelayParas = polkadot_runtime_parachains::paras::Pallet<KusamaRuntime>;
+pub type RelayCrowdloan = polkadot_runtime_common::crowdloan::Pallet<KusamaRuntime>;
+pub type RelayInitializer = polkadot_runtime_parachains::initializer::Pallet<KusamaRuntime>;
+pub type RelayCrowdloanEvent = polkadot_runtime_common::crowdloan::Event<KusamaRuntime>;
+pub type RelaySystem = frame_system::Pallet<KusamaRuntime>;
+pub type RelayEvent = kusama_runtime::Event;
+
 pub fn para_a_id() -> ParaId {
     ParaId::from(1)
+}
+
+pub fn parathread_id() -> ParaId {
+    ParaId::from(2001)
 }
 
 pub fn para_ext(para_id: u32) -> sp_io::TestExternalities {
@@ -513,8 +566,8 @@ pub fn para_ext(para_id: u32) -> sp_io::TestExternalities {
         System::set_block_number(1);
         Assets::force_create(Origin::root(), DOT, Id(ALICE), true, 1).unwrap();
         Assets::force_create(Origin::root(), XDOT, Id(ALICE), true, 1).unwrap();
-        Assets::mint(Origin::signed(ALICE), DOT, Id(ALICE), 100 * DOT_DECIMAL).unwrap();
-        Assets::mint(Origin::signed(ALICE), XDOT, Id(ALICE), 100 * DOT_DECIMAL).unwrap();
+        Assets::mint(Origin::signed(ALICE), DOT, Id(ALICE), dot(100_000f64)).unwrap();
+        Assets::mint(Origin::signed(ALICE), XDOT, Id(ALICE), dot(100f64)).unwrap();
         Assets::mint(
             Origin::signed(ALICE),
             DOT,
@@ -522,7 +575,7 @@ pub fn para_ext(para_id: u32) -> sp_io::TestExternalities {
             dot(30f64),
         )
         .unwrap();
-        Crowdloans::update_xcm_fees(Origin::root(), dot(10f64)).unwrap();
+        XcmHelper::update_xcm_fees(Origin::root(), dot(10f64)).unwrap();
     });
 
     ext
@@ -536,8 +589,8 @@ pub fn relay_ext() -> sp_io::TestExternalities {
 
     pallet_balances::GenesisConfig::<Runtime> {
         balances: vec![
-            (ALICE, 100 * DOT_DECIMAL),
-            (para_a_id().into_account(), 1_000_000 * DOT_DECIMAL),
+            (ALICE, dot(100_000f64)),
+            (para_a_id().into_account(), dot(1_000_000f64)),
         ],
     }
     .assimilate_storage(&mut t)
