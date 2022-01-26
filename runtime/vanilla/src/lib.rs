@@ -136,10 +136,10 @@ pub const VERSION: RuntimeVersion = RuntimeVersion {
     spec_name: create_runtime_str!("vanilla"),
     impl_name: create_runtime_str!("vanilla"),
     authoring_version: 1,
-    spec_version: 176,
-    impl_version: 21,
+    spec_version: 177,
+    impl_version: 22,
     apis: RUNTIME_API_VERSIONS,
-    transaction_version: 5,
+    transaction_version: 6,
 };
 
 // 1 in 4 blocks (on average, not counting collisions) will be primary babe blocks.
@@ -473,10 +473,11 @@ parameter_types! {
     pub const StakingPalletId: PalletId = PalletId(*b"par/lqsk");
     pub const DerivativeIndex: u16 = 0;
     pub const UnstakeQueueCapacity: u32 = 1000;
-    pub const MinStakeAmount: Balance = 1_000_000_000_000;
-    pub const MinUnstakeAmount: Balance = 500_000_000_000;
+    pub const MinStakeAmount: Balance = 100_000_000_000; // 0.1KSM
+    pub const MinUnstakeAmount: Balance = 50_000_000_000; // 0.05KSM
     pub const StakingCurrency: CurrencyId = KSM;
     pub const LiquidCurrency: CurrencyId = XKSM;
+    pub const XcmFees: Balance = 5_000_000_000; // 0.005KSM
 }
 
 impl pallet_liquid_staking::Config for Runtime {
@@ -490,7 +491,7 @@ impl pallet_liquid_staking::Config for Runtime {
     type StakingCurrency = StakingCurrency;
     type LiquidCurrency = LiquidCurrency;
     type DerivativeIndex = DerivativeIndex;
-    type AccountIdToMultiLocation = AccountIdToMultiLocation;
+    type XcmFees = XcmFees;
     type UnstakeQueueCapacity = UnstakeQueueCapacity;
     type MinStakeAmount = MinStakeAmount;
     type MinUnstakeAmount = MinUnstakeAmount;
@@ -876,8 +877,9 @@ impl Convert<Balance, Balance> for GiftConvert {
             return Zero::zero();
         }
 
+        // 0.1KSM
         if amount >= 10_u128.pow((decimal - 1).into()) {
-            return DOLLARS / 40;
+            return DOLLARS / 40; // 0.025HKO
         }
 
         Zero::zero()
@@ -1002,7 +1004,7 @@ parameter_types! {
       pub const MinimumCount: u32 = 1;
       pub const ExpiresIn: Moment = 1000 * 60 * 60; // 60 mins
       pub const MaxHasDispatchedSize: u32 = 100;
-      pub RootOperator: AccountId = AccountId::from([1u8; 32]);
+      pub OneAccount: AccountId = AccountId::from([1u8; 32]);
 }
 
 type ParallelDataProvider = orml_oracle::Instance1;
@@ -1014,7 +1016,7 @@ impl orml_oracle::Config<ParallelDataProvider> for Runtime {
     type Time = Timestamp;
     type OracleKey = CurrencyId;
     type OracleValue = Price;
-    type RootOperatorAccountId = RootOperator;
+    type RootOperatorAccountId = OneAccount;
     type MaxHasDispatchedSize = MaxHasDispatchedSize;
     type WeightInfo = ();
     type Members = OracleMembership;
@@ -1342,19 +1344,22 @@ impl orml_vesting::Config for Runtime {
 
 parameter_types! {
     pub const AMMPalletId: PalletId = PalletId(*b"par/ammp");
-    pub DefaultLpFee: Perbill = Perbill::from_rational(25u32, 10000u32);        // 0.25%
-    pub DefaultProtocolFee: Perbill = Perbill::from_rational(5u32, 10000u32);   // 0.05%
+    pub DefaultLpFee: Ratio = Ratio::from_rational(25u32, 10000u32);        // 0.25%
+    pub DefaultProtocolFee: Ratio = Ratio::from_rational(5u32, 10000u32);   // 0.05%
     pub DefaultProtocolFeeReceiver: AccountId = TreasuryPalletId::get().into_account();
+    pub const MinimumLiquidity: u128 = 1_000u128;
 }
 
 impl pallet_amm::Config for Runtime {
     type Event = Event;
     type Assets = CurrencyAdapter;
     type PalletId = AMMPalletId;
+    type LockAccountId = OneAccount;
     type AMMWeightInfo = pallet_amm::weights::SubstrateWeight<Runtime>;
     type CreatePoolOrigin = EnsureRootOrMoreThanHalfGeneralCouncil;
     type LpFee = DefaultLpFee;
     type ProtocolFee = DefaultProtocolFee;
+    type MinimumLiquidity = MinimumLiquidity;
     type ProtocolFeeReceiver = DefaultProtocolFeeReceiver;
 }
 
@@ -1389,8 +1394,6 @@ impl pallet_crowdloans::Config for Runtime {
     type SelfParaId = ParachainInfo;
     type Assets = Assets;
     type RelayCurrency = RelayCurrency;
-    type AccountIdToMultiLocation = AccountIdToMultiLocation;
-    type RefundLocation = RefundLocation;
     type MinContribution = MinContribution;
     type MaxVrfs = MaxVrfs;
     type MigrateKeysLimit = MigrateKeysLimit;
@@ -1422,6 +1425,8 @@ impl pallet_xcm_helper::Config for Runtime {
     type RelayNetwork = RelayNetwork;
     type PalletId = XcmHelperPalletId;
     type NotifyTimeout = NotifyTimeout;
+    type AccountIdToMultiLocation = AccountIdToMultiLocation;
+    type RefundLocation = RefundLocation;
     type BlockNumberProvider = frame_system::Pallet<Runtime>;
     type WeightInfo = pallet_xcm_helper::weights::SubstrateWeight<Runtime>;
 }
@@ -1432,7 +1437,7 @@ parameter_types! {
 
 impl pallet_router::Config for Runtime {
     type Event = Event;
-    type RouterPalletId = RouterPalletId;
+    type PalletId = RouterPalletId;
     type AMM = AMM;
     type AMMRouterWeightInfo = pallet_router::weights::SubstrateWeight<Runtime>;
     type MaxLengthRoute = MaxLengthRoute;
@@ -1455,7 +1460,7 @@ impl pallet_liquidity_mining::Config for Runtime {
     type Assets = CurrencyAdapter;
     type PalletId = LMPalletId;
     type MaxRewardTokens = MaxRewardTokens;
-    type CreateOrigin = EnsureRoot<AccountId>;
+    type CreateOrigin = EnsureRootOrMoreThanHalfGeneralCouncil;
     type WeightInfo = pallet_liquidity_mining::weights::SubstrateWeight<Runtime>;
 }
 

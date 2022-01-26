@@ -32,6 +32,7 @@ use frame_support::{
     },
     PalletId,
 };
+
 use orml_traits::{DataProvider, DataProviderExtended};
 use polkadot_runtime_common::SlowAdjustingFeeUpdate;
 use sp_api::impl_runtime_apis;
@@ -88,7 +89,9 @@ pub use impls::DealWithFees;
 
 pub use pallet_liquid_staking;
 // pub use pallet_liquidation;
+pub use pallet_amm;
 pub use pallet_bridge;
+pub use pallet_liquidity_mining;
 pub use pallet_loans;
 pub use pallet_multisig;
 pub use pallet_nominee_election;
@@ -137,10 +140,10 @@ pub const VERSION: RuntimeVersion = RuntimeVersion {
     spec_name: create_runtime_str!("heiko"),
     impl_name: create_runtime_str!("heiko"),
     authoring_version: 1,
-    spec_version: 176,
-    impl_version: 21,
+    spec_version: 177,
+    impl_version: 22,
     apis: RUNTIME_API_VERSIONS,
-    transaction_version: 5,
+    transaction_version: 6,
 };
 
 // 1 in 4 blocks (on average, not counting collisions) will be primary babe blocks.
@@ -207,6 +210,7 @@ impl Contains<Call> for BaseCallFilter {
             Call::System(_) |
             Call::Timestamp(_) |
             Call::Balances(_) |
+            Call::Assets(pallet_assets::Call::mint { .. }) |
             // Governance
             Call::Sudo(_) |
             Call::Democracy(_) |
@@ -382,7 +386,7 @@ impl Convert<MultiAsset, Option<CurrencyId>> for CurrencyIdConvert {
     fn convert(a: MultiAsset) -> Option<CurrencyId> {
         if let MultiAsset {
             id: AssetId::Concrete(id),
-            fun: Fungibility::Fungible(_amount),
+            fun: _,
         } = a
         {
             Self::convert(id)
@@ -405,7 +409,8 @@ impl Convert<AccountId, MultiLocation> for AccountIdToMultiLocation {
 
 parameter_types! {
     pub SelfLocation: MultiLocation = MultiLocation::new(1, X1(Parachain(ParachainInfo::parachain_id().into())));
-    pub BaseXcmWeight: Weight = 150_000_000;
+    pub const BaseXcmWeight: Weight = 150_000_000;
+    pub const MaxInstructions: u32 = 100;
 }
 
 impl orml_xtokens::Config for Runtime {
@@ -462,10 +467,11 @@ parameter_types! {
     pub const StakingPalletId: PalletId = PalletId(*b"par/lqsk");
     pub const DerivativeIndex: u16 = 0;
     pub const UnstakeQueueCapacity: u32 = 1000;
-    pub const MinStakeAmount: Balance = 1_000_000_000_000;
-    pub const MinUnstakeAmount: Balance = 500_000_000_000;
+    pub const MinStakeAmount: Balance = 100_000_000_000; // 0.1KSM
+    pub const MinUnstakeAmount: Balance = 50_000_000_000; // 0.05KSM
     pub const StakingCurrency: CurrencyId = KSM;
     pub const LiquidCurrency: CurrencyId = XKSM;
+    pub const XcmFees: Balance = 5_000_000_000; // 0.005KSM
 }
 
 impl pallet_liquid_staking::Config for Runtime {
@@ -477,9 +483,9 @@ impl pallet_liquid_staking::Config for Runtime {
     type RelayOrigin = EnsureRootOrMoreThanHalfGeneralCouncil;
     type UpdateOrigin = EnsureRootOrMoreThanHalfGeneralCouncil;
     type DerivativeIndex = DerivativeIndex;
+    type XcmFees = XcmFees;
     type StakingCurrency = StakingCurrency;
     type LiquidCurrency = LiquidCurrency;
-    type AccountIdToMultiLocation = AccountIdToMultiLocation;
     type UnstakeQueueCapacity = UnstakeQueueCapacity;
     type MinStakeAmount = MinStakeAmount;
     type MinUnstakeAmount = MinUnstakeAmount;
@@ -776,10 +782,6 @@ pub type XcmRouter = (
     XcmpQueue,
 );
 
-parameter_types! {
-    pub const MaxInstructions: u32 = 100;
-}
-
 impl pallet_xcm::Config for Runtime {
     const VERSION_DISCOVERY_QUEUE_SIZE: u32 = 100;
 
@@ -841,7 +843,7 @@ parameter_types! {
     pub RelayCurrency: CurrencyId = KSM;
     pub HeikoNetwork: NetworkId = NetworkId::Named("heiko".into());
     pub RelayChainOrigin: Origin = cumulus_pallet_xcm::Origin::Relay.into();
-    pub Ancestry: MultiLocation =  MultiLocation::new(0, X1(Parachain(ParachainInfo::parachain_id().into())));
+    pub Ancestry: MultiLocation = MultiLocation::new(0, X1(Parachain(ParachainInfo::parachain_id().into())));
 }
 
 /// Type for specifying how a `MultiLocation` can be converted into an `AccountId`. This is used
@@ -869,8 +871,9 @@ impl Convert<Balance, Balance> for GiftConvert {
             return Zero::zero();
         }
 
+        // 0.1KSM
         if amount >= 10_u128.pow((decimal - 1).into()) {
-            return DOLLARS / 40;
+            return DOLLARS / 40; // 0.025HKO
         }
 
         Zero::zero()
@@ -918,6 +921,10 @@ pub type XcmOriginToTransactDispatchOrigin = (
     XcmPassthrough<Origin>,
 );
 
+parameter_types! {
+    pub KsmPerSecond: (AssetId, u128) = (AssetId::Concrete(MultiLocation::parent()), ksm_per_second());
+}
+
 match_type! {
     pub type ParentOrSiblings: impl Contains<MultiLocation> = {
         MultiLocation { parents: 1, interior: Here } |
@@ -947,10 +954,6 @@ impl TakeRevenue for ToTreasury {
     }
 }
 
-parameter_types! {
-    pub KsmPerSecond: (AssetId, u128) = (AssetId::Concrete(MultiLocation::parent()), ksm_per_second());
-}
-
 pub struct XcmConfig;
 impl Config for XcmConfig {
     type Call = Call;
@@ -975,7 +978,7 @@ parameter_types! {
       pub const MinimumCount: u32 = 1;
       pub const ExpiresIn: Moment = 1000 * 60 * 60; // 60 mins
       pub const MaxHasDispatchedSize: u32 = 100;
-      pub RootOperator: AccountId = AccountId::from([1u8; 32]);
+      pub OneAccount: AccountId = AccountId::from([1u8; 32]);
 }
 
 type ParallelDataProvider = orml_oracle::Instance1;
@@ -987,7 +990,7 @@ impl orml_oracle::Config<ParallelDataProvider> for Runtime {
     type Time = Timestamp;
     type OracleKey = CurrencyId;
     type OracleValue = Price;
-    type RootOperatorAccountId = RootOperator;
+    type RootOperatorAccountId = OneAccount;
     type MaxHasDispatchedSize = MaxHasDispatchedSize;
     type WeightInfo = ();
     type Members = OracleMembership;
@@ -1314,19 +1317,22 @@ impl orml_vesting::Config for Runtime {
 
 parameter_types! {
     pub const AMMPalletId: PalletId = PalletId(*b"par/ammp");
-    pub DefaultLpFee: Perbill = Perbill::from_rational(25u32, 10000u32);        // 0.25%
-    pub DefaultProtocolFee: Perbill = Perbill::from_rational(5u32, 10000u32);   // 0.05%
+    pub DefaultLpFee: Ratio = Ratio::from_rational(25u32, 10000u32);        // 0.25%
+    pub DefaultProtocolFee: Ratio = Ratio::from_rational(5u32, 10000u32);   // 0.05%
     pub DefaultProtocolFeeReceiver: AccountId = TreasuryPalletId::get().into_account();
+    pub const MinimumLiquidity: u128 = 1_000u128;
 }
 
 impl pallet_amm::Config for Runtime {
     type Event = Event;
     type Assets = CurrencyAdapter;
     type PalletId = AMMPalletId;
+    type LockAccountId = OneAccount;
     type CreatePoolOrigin = EnsureRootOrMoreThanHalfGeneralCouncil;
     type AMMWeightInfo = pallet_amm::weights::SubstrateWeight<Runtime>;
     type LpFee = DefaultLpFee;
     type ProtocolFee = DefaultProtocolFee;
+    type MinimumLiquidity = MinimumLiquidity;
     type ProtocolFeeReceiver = DefaultProtocolFeeReceiver;
 }
 
@@ -1361,8 +1367,6 @@ impl pallet_crowdloans::Config for Runtime {
     type SelfParaId = ParachainInfo;
     type Assets = Assets;
     type RelayCurrency = RelayCurrency;
-    type AccountIdToMultiLocation = AccountIdToMultiLocation;
-    type RefundLocation = RefundLocation;
     type MinContribution = MinContribution;
     type MaxVrfs = MaxVrfs;
     type MigrateKeysLimit = MigrateKeysLimit;
@@ -1394,6 +1398,8 @@ impl pallet_xcm_helper::Config for Runtime {
     type RelayNetwork = RelayNetwork;
     type PalletId = XcmHelperPalletId;
     type NotifyTimeout = NotifyTimeout;
+    type AccountIdToMultiLocation = AccountIdToMultiLocation;
+    type RefundLocation = RefundLocation;
     type BlockNumberProvider = frame_system::Pallet<Runtime>;
     type WeightInfo = pallet_xcm_helper::weights::SubstrateWeight<Runtime>;
 }
@@ -1405,7 +1411,7 @@ parameter_types! {
 
 impl pallet_router::Config for Runtime {
     type Event = Event;
-    type RouterPalletId = RouterPalletId;
+    type PalletId = RouterPalletId;
     type AMM = AMM;
     type AMMRouterWeightInfo = pallet_router::weights::SubstrateWeight<Runtime>;
     type MaxLengthRoute = MaxLengthRoute;
@@ -1418,29 +1424,30 @@ impl pallet_currency_adapter::Config for Runtime {
     type GetNativeCurrencyId = NativeCurrencyId;
 }
 
-// parameter_types! {
-//     pub const LMPalletId: PalletId = PalletId(*b"par/lqmp");
-//     pub const MaxRewardTokens: u32 = 1000;
-// }
-//
-// impl pallet_liquidity_mining::Config for Runtime {
-//     type Event = Event;
-//     type Assets = CurrencyAdapter;
-//     type PalletId = LMPalletId;
-//     type MaxRewardTokens = MaxRewardTokens;
-//     type CreateOrigin = EnsureRoot<AccountId>;
-//     type WeightInfo = pallet_liquidity_mining::weights::SubstrateWeight<Runtime>;
-// }
+parameter_types! {
+    pub const LMPalletId: PalletId = PalletId(*b"par/lqmp");
+    pub const MaxRewardTokens: u32 = 1000;
+}
+
+impl pallet_liquidity_mining::Config for Runtime {
+    type Event = Event;
+    type Assets = CurrencyAdapter;
+    type PalletId = LMPalletId;
+    type MaxRewardTokens = MaxRewardTokens;
+    type CreateOrigin = EnsureRootOrMoreThanHalfGeneralCouncil;
+    type WeightInfo = pallet_liquidity_mining::weights::SubstrateWeight<Runtime>;
+}
 
 pub struct WhiteListFilter;
 impl Contains<Call> for WhiteListFilter {
     fn contains(call: &Call) -> bool {
         matches!(
             call,
-            // System
+            // System, Currencies
             Call::System(_) |
             Call::Timestamp(_) |
             Call::Balances(_) |
+            Call::Assets(pallet_assets::Call::mint { .. }) |
             // Governance
             Call::Sudo(_) |
             Call::Democracy(_) |
@@ -1557,7 +1564,7 @@ construct_runtime!(
         // Others
         // Bridge: pallet_bridge::{Pallet, Call, Storage, Event<T>} = 90,
         EmergencyShutdown: pallet_emergency_shutdown::{Pallet, Call, Storage, Event<T>} = 91,
-        // LiquidityMining: pallet_liquidity_mining::{Pallet, Call, Storage, Event<T>} = 92,
+        LiquidityMining: pallet_liquidity_mining::{Pallet, Call, Storage, Event<T>} = 92,
         XcmHelper: pallet_xcm_helper::{Pallet, Call, Storage, Event<T>} = 93,
     }
 );
@@ -1759,6 +1766,7 @@ impl_runtime_apis! {
             list_benchmark!(list, extra, pallet_router, AMMRoute);
             list_benchmark!(list, extra, pallet_crowdloans, Crowdloans);
             list_benchmark!(list, extra, pallet_xcm_helper, XcmHelper);
+            list_benchmark!(list, extra, pallet_liquidity_mining, LiquidityMining);
 
             let storage_info = AllPalletsWithSystem::storage_info();
 
@@ -1804,6 +1812,7 @@ impl_runtime_apis! {
             add_benchmark!(params, batches, pallet_router, AMMRoute);
             add_benchmark!(params, batches, pallet_crowdloans, Crowdloans);
             add_benchmark!(params, batches, pallet_xcm_helper, XcmHelper);
+            add_benchmark!(params, batches, pallet_liquidity_mining, LiquidityMining);
 
             if batches.is_empty() { return Err("Benchmark not found for this pallet.".into()) }
             Ok(batches)
@@ -1817,6 +1826,7 @@ impl_runtime_apis! {
             let weight = Executive::try_runtime_upgrade().unwrap();
             (weight, RuntimeBlockWeights::get().max_block)
         }
+
         fn execute_block_no_check(block: Block) -> Weight {
             Executive::execute_block_no_check(block)
         }
