@@ -27,6 +27,7 @@ mod mock;
 #[cfg(test)]
 mod tests;
 
+pub mod migrations;
 pub mod types;
 pub mod weights;
 
@@ -71,6 +72,7 @@ pub mod pallet {
 
     #[pallet::pallet]
     #[pallet::generate_store(pub(super) trait Store)]
+    #[pallet::without_storage_info]
     pub struct Pallet<T>(_);
 
     #[pallet::config]
@@ -260,13 +262,13 @@ pub mod pallet {
         /// No contributions allowed during the VRF delay
         VrfDelayInProgress,
         /// Attempted contribution violates contribution cap
-        ExceededCap,
+        CapExceeded,
         /// Current relay block is greater than vault end block
-        ExceededEndBlock,
+        EndBlockExceeded,
         /// Exceeded maximum vrfs
-        ExceededMaxVrfs,
+        MaxVrfsExceeded,
         /// Capacity cannot be zero value
-        ZeroCap,
+        InvalidCap,
         /// Invalid params input
         InvalidParams,
         /// Vault is not ready to be dissolved
@@ -316,6 +318,10 @@ pub mod pallet {
     #[pallet::getter(fn xcm_request)]
     pub type XcmRequests<T> = StorageMap<_, Blake2_128Concat, QueryId, XcmRequest<T>, OptionQuery>;
 
+    /// Storage version of the pallet.
+    #[pallet::storage]
+    pub type StorageVersion<T: Config> = StorageValue<_, Releases, ValueQuery>;
+
     #[pallet::call]
     impl<T: Config> Pallet<T> {
         /// Create a new vault via a governance decision
@@ -341,7 +347,7 @@ pub mod pallet {
         ) -> DispatchResult {
             T::CreateVaultOrigin::ensure_origin(origin)?;
 
-            ensure!(!cap.is_zero(), Error::<T>::ZeroCap);
+            ensure!(!cap.is_zero(), Error::<T>::InvalidCap);
 
             ensure!(
                 lease_start <= lease_end,
@@ -366,7 +372,7 @@ pub mod pallet {
 
             ensure!(
                 T::RelayChainBlockNumberProvider::current_block_number() <= end_block,
-                Error::<T>::ExceededEndBlock
+                Error::<T>::EndBlockExceeded
             );
 
             let trie_index = Self::next_trie_index();
@@ -425,14 +431,14 @@ pub mod pallet {
             let mut vault = Self::current_vault(crowdloan).ok_or(Error::<T>::VaultDoesNotExist)?;
 
             if let Some(cap) = cap {
-                ensure!(!cap.is_zero(), Error::<T>::ZeroCap);
+                ensure!(!cap.is_zero(), Error::<T>::InvalidCap);
                 vault.cap = cap;
             }
 
             if let Some(end_block) = end_block {
                 ensure!(
                     T::RelayChainBlockNumberProvider::current_block_number() <= end_block,
-                    Error::<T>::ExceededEndBlock
+                    Error::<T>::EndBlockExceeded
                 );
                 vault.end_block = end_block;
             }
@@ -505,7 +511,7 @@ pub mod pallet {
 
             ensure!(
                 T::RelayChainBlockNumberProvider::current_block_number() <= vault.end_block,
-                Error::<T>::ExceededEndBlock
+                Error::<T>::EndBlockExceeded
             );
 
             ensure!(
@@ -525,7 +531,7 @@ pub mod pallet {
                     .checked_add(amount)
                     .ok_or(ArithmeticError::Overflow)?
                     <= vault.cap,
-                Error::<T>::ExceededCap
+                Error::<T>::CapExceeded
             );
 
             T::Assets::transfer(
@@ -598,7 +604,7 @@ pub mod pallet {
             );
 
             Vrfs::<T>::try_mutate(|b| -> Result<(), DispatchError> {
-                *b = vrfs.try_into().map_err(|_| Error::<T>::ExceededMaxVrfs)?;
+                *b = vrfs.try_into().map_err(|_| Error::<T>::MaxVrfsExceeded)?;
                 Ok(())
             })?;
 

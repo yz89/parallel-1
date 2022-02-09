@@ -28,7 +28,7 @@ use frame_support::{
     match_type,
     traits::{
         fungibles::{InspectMetadata, Mutate},
-        Contains, EqualPrivilegeOnly, Everything, InstanceFilter, Nothing,
+        Contains, EnsureOneOf, EqualPrivilegeOnly, Everything, InstanceFilter, Nothing,
     },
     PalletId,
 };
@@ -58,7 +58,7 @@ use sp_version::RuntimeVersion;
 use frame_support::log;
 use frame_system::{
     limits::{BlockLength, BlockWeights},
-    EnsureOneOf, EnsureRoot,
+    EnsureRoot,
 };
 
 use orml_xcm_support::{IsNativeConcrete, MultiNativeAsset};
@@ -93,9 +93,9 @@ pub use pallet_amm;
 pub use pallet_bridge;
 pub use pallet_liquidity_mining;
 pub use pallet_loans;
-pub use pallet_multisig;
 pub use pallet_nominee_election;
 pub use pallet_prices;
+pub use pallet_router;
 
 use currency::*;
 use fee::*;
@@ -144,6 +144,7 @@ pub const VERSION: RuntimeVersion = RuntimeVersion {
     impl_version: 22,
     apis: RUNTIME_API_VERSIONS,
     transaction_version: 6,
+    state_version: 0,
 };
 
 // 1 in 4 blocks (on average, not counting collisions) will be primary babe blocks.
@@ -218,6 +219,7 @@ impl Contains<Call> for BaseCallFilter {
             Call::TechnicalCommittee(_) |
             Call::Treasury(_) |
             Call::Scheduler(_) |
+            Call::Preimage(_) |
             // Parachain
             Call::ParachainSystem(_) |
             Call::XcmpQueue(_) |
@@ -231,6 +233,7 @@ impl Contains<Call> for BaseCallFilter {
             Call::Utility(_) |
             Call::Multisig(_) |
             Call::Proxy(_) |
+            Call::Identity(_) |
             Call::EmergencyShutdown(_) |
             // 3rd Party
             Call::Vesting(_) |
@@ -245,7 +248,9 @@ impl Contains<Call> for BaseCallFilter {
             // Membership
             Call::OracleMembership(_) |
             Call::GeneralCouncilMembership(_) |
-            Call::TechnicalCommitteeMembership(_)
+            Call::TechnicalCommitteeMembership(_) |
+            // Route
+            Call::AMMRoute(_)
         )
 
         // // Consensus
@@ -319,10 +324,11 @@ impl frame_system::Config for Runtime {
     type SS58Prefix = SS58Prefix;
     /// The set code logic.
     type OnSetCode = cumulus_pallet_parachain_system::ParachainSetCode<Self>;
+    type MaxConsumers = frame_support::traits::ConstU32<16>;
 }
 
 parameter_types! {
-   pub TreasuryAccount: AccountId = TreasuryPalletId::get().into_account();
+    pub TreasuryAccount: AccountId = TreasuryPalletId::get().into_account();
 }
 
 impl orml_xcm::Config for Runtime {
@@ -411,6 +417,7 @@ parameter_types! {
     pub SelfLocation: MultiLocation = MultiLocation::new(1, X1(Parachain(ParachainInfo::parachain_id().into())));
     pub const BaseXcmWeight: Weight = 150_000_000;
     pub const MaxInstructions: u32 = 100;
+    pub const MaxAssetsForTransfer: usize = 2;
 }
 
 impl orml_xtokens::Config for Runtime {
@@ -424,12 +431,14 @@ impl orml_xtokens::Config for Runtime {
     type Weigher = FixedWeightBounds<BaseXcmWeight, Call, MaxInstructions>;
     type BaseXcmWeight = BaseXcmWeight;
     type LocationInverter = LocationInverter<Ancestry>;
+    type MaxAssetsForTransfer = MaxAssetsForTransfer;
 }
 
 parameter_types! {
     pub const AssetDeposit: Balance = DOLLARS; // 1 UNIT deposit to create asset
     pub const ApprovalDeposit: Balance = EXISTENTIAL_DEPOSIT;
     pub const AssetsStringLimit: u32 = 50;
+    pub const AssetAccountDeposit: Balance = DOLLARS;
     /// Key = 32 bytes, Value = 36 bytes (32+1+1+1+1)
     // https://github.com/paritytech/substrate/blob/069917b/frame/assets/src/lib.rs#L257L271
     pub const MetadataDepositBase: Balance = deposit(1, 68);
@@ -445,6 +454,7 @@ impl pallet_assets::Config for Runtime {
     type AssetDeposit = AssetDeposit;
     type MetadataDepositBase = MetadataDepositBase;
     type MetadataDepositPerByte = MetadataDepositPerByte;
+    type AssetAccountDeposit = AssetAccountDeposit;
     type ApprovalDeposit = ApprovalDeposit;
     type StringLimit = AssetsStringLimit;
     type Freezer = ();
@@ -466,9 +476,9 @@ impl pallet_loans::Config for Runtime {
 parameter_types! {
     pub const StakingPalletId: PalletId = PalletId(*b"par/lqsk");
     pub const DerivativeIndex: u16 = 0;
-    pub const UnstakeQueueCapacity: u32 = 1000;
-    pub const MinStakeAmount: Balance = 100_000_000_000; // 0.1KSM
-    pub const MinUnstakeAmount: Balance = 50_000_000_000; // 0.05KSM
+    pub const UnstakeQueueCap: u32 = 1000;
+    pub const MinStake: Balance = 100_000_000_000; // 0.1KSM
+    pub const MinUnstake: Balance = 50_000_000_000; // 0.05KSM
     pub const StakingCurrency: CurrencyId = KSM;
     pub const LiquidCurrency: CurrencyId = XKSM;
     pub const XcmFees: Balance = 5_000_000_000; // 0.005KSM
@@ -486,9 +496,9 @@ impl pallet_liquid_staking::Config for Runtime {
     type XcmFees = XcmFees;
     type StakingCurrency = StakingCurrency;
     type LiquidCurrency = LiquidCurrency;
-    type UnstakeQueueCapacity = UnstakeQueueCapacity;
-    type MinStakeAmount = MinStakeAmount;
-    type MinUnstakeAmount = MinUnstakeAmount;
+    type UnstakeQueueCap = UnstakeQueueCap;
+    type MinStake = MinStake;
+    type MinUnstake = MinUnstake;
     type XCM = XcmHelper;
 }
 
@@ -809,6 +819,7 @@ impl cumulus_pallet_xcm::Config for Runtime {
 impl cumulus_pallet_xcmp_queue::Config for Runtime {
     type Event = Event;
     type XcmExecutor = XcmExecutor<XcmConfig>;
+    type ExecuteOverweightOrigin = EnsureRoot<AccountId>;
     type ChannelInfo = ParachainSystem;
     type VersionWrapper = PolkadotXcm;
 }
@@ -826,7 +837,7 @@ parameter_types! {
 
 impl cumulus_pallet_parachain_system::Config for Runtime {
     type Event = Event;
-    type OnValidationData = ();
+    type OnSystemEvent = ();
     type SelfParaId = ParachainInfo;
     type DmpMessageHandler = DmpQueue;
     type OutboundXcmpMessageSource = XcmpQueue;
@@ -1059,19 +1070,40 @@ impl pallet_multisig::Config for Runtime {
     type WeightInfo = weights::pallet_multisig::WeightInfo<Runtime>;
 }
 
+parameter_types! {
+    pub const BasicDeposit: Balance = deposit(1, 258);
+    pub const FieldDeposit: Balance = deposit(1, 66);
+    pub const SubAccountDeposit: Balance  = deposit(1, 53);
+    pub const MaxSubAccounts: u32 = 100;
+    pub const MaxAdditionalFields: u32 = 100;
+    pub const MaxRegistrars: u32 = 20;
+}
+
+impl pallet_identity::Config for Runtime {
+    type Event = Event;
+    type Currency = Balances;
+    type BasicDeposit = BasicDeposit;
+    type FieldDeposit = FieldDeposit;
+    type SubAccountDeposit = SubAccountDeposit;
+    type MaxSubAccounts = MaxSubAccounts;
+    type MaxAdditionalFields = MaxAdditionalFields;
+    type MaxRegistrars = MaxRegistrars;
+    type Slashed = Treasury;
+    type ForceOrigin = EnsureRootOrMoreThanHalfGeneralCouncil;
+    type RegistrarOrigin = EnsureRootOrMoreThanHalfGeneralCouncil;
+    type WeightInfo = pallet_identity::weights::SubstrateWeight<Runtime>;
+}
+
 type EnsureRootOrMoreThanHalfGeneralCouncil = EnsureOneOf<
-    AccountId,
     EnsureRoot<AccountId>,
     pallet_collective::EnsureProportionMoreThan<_1, _2, AccountId, GeneralCouncilCollective>,
 >;
 type EnsureRootOrAtLeastThreeFifthsGeneralCouncil = EnsureOneOf<
-    AccountId,
     EnsureRoot<AccountId>,
     pallet_collective::EnsureProportionAtLeast<_3, _5, AccountId, GeneralCouncilCollective>,
 >;
 
 type EnsureAllTechnicalComittee = EnsureOneOf<
-    AccountId,
     EnsureRoot<AccountId>,
     pallet_collective::EnsureProportionAtLeast<_1, _1, AccountId, TechnicalCollective>,
 >;
@@ -1085,7 +1117,6 @@ parameter_types! {
     pub const EnactmentPeriod: BlockNumber = 8 * DAYS;
     pub const CooloffPeriod: BlockNumber = 7 * DAYS;
     // One cent: $10,000 / MB
-    pub const PreimageByteDeposit: Balance = 1 * CENTS;
     pub const MaxVotes: u32 = 100;
     pub const MaxProposals: u32 = 100;
 }
@@ -1204,9 +1235,25 @@ impl pallet_membership::Config<TechnicalCommitteeMembershipInstance> for Runtime
 }
 
 parameter_types! {
+    pub const PreimageMaxSize: u32 = 4096 * 1024;
+    pub const PreimageBaseDeposit: Balance = deposit(2, 64);
+    pub const PreimageByteDeposit: Balance = deposit(0, 1);
+}
+
+impl pallet_preimage::Config for Runtime {
+    type WeightInfo = pallet_preimage::weights::SubstrateWeight<Runtime>;
+    type Event = Event;
+    type Currency = Balances;
+    type ManagerOrigin = EnsureRootOrMoreThanHalfGeneralCouncil;
+    type MaxSize = PreimageMaxSize;
+    type BaseDeposit = PreimageBaseDeposit;
+    type ByteDeposit = PreimageByteDeposit;
+}
+parameter_types! {
     pub MaximumSchedulerWeight: Weight = Perbill::from_percent(80) *
         RuntimeBlockWeights::get().max_block;
     pub const MaxScheduledPerBlock: u32 = 50;
+    pub const NoPreimagePostponement: Option<u32> = Some(10);
 }
 
 impl pallet_scheduler::Config for Runtime {
@@ -1219,11 +1266,14 @@ impl pallet_scheduler::Config for Runtime {
     type MaxScheduledPerBlock = MaxScheduledPerBlock;
     type OriginPrivilegeCmp = EqualPrivilegeOnly;
     type WeightInfo = pallet_scheduler::weights::SubstrateWeight<Runtime>;
+    type PreimageProvider = Preimage;
+    type NoPreimagePostponement = NoPreimagePostponement;
 }
 
 parameter_types! {
     pub const ProposalBond: Permill = Permill::from_percent(5);
     pub const ProposalBondMinimum: Balance = 1 * DOLLARS;
+    pub const ProposalBondMaximum: Balance = 5 * DOLLARS;
     pub const SpendPeriod: BlockNumber = 1 * DAYS;
     pub const Burn: Permill = Permill::from_percent(0);
     pub const TreasuryPalletId: PalletId = PalletId(*b"par/trsy");
@@ -1239,6 +1289,7 @@ impl pallet_treasury::Config for Runtime {
     type OnSlash = ();
     type ProposalBond = ProposalBond;
     type ProposalBondMinimum = ProposalBondMinimum;
+    type ProposalBondMaximum = ProposalBondMaximum;
     type SpendPeriod = SpendPeriod;
     type Burn = Burn;
     type BurnDestination = ();
@@ -1334,6 +1385,7 @@ impl pallet_amm::Config for Runtime {
     type ProtocolFee = DefaultProtocolFee;
     type MinimumLiquidity = MinimumLiquidity;
     type ProtocolFeeReceiver = DefaultProtocolFeeReceiver;
+    type MaxLengthRoute = MaxLengthRoute;
 }
 
 parameter_types! {
@@ -1468,6 +1520,7 @@ impl Contains<Call> for WhiteListFilter {
             Call::Utility(_) |
             Call::Multisig(_) |
             Call::Proxy(_) |
+            Call::Identity(_) |
             Call::EmergencyShutdown(_) |
             // 3rd Party
             Call::Vesting(_) |
@@ -1509,6 +1562,7 @@ construct_runtime!(
         TransactionPayment: pallet_transaction_payment::{Pallet, Storage} = 5,
         Assets: pallet_assets::{Pallet, Call, Storage, Event<T>} = 6,
         Proxy: pallet_proxy::{Pallet, Call, Storage, Event<T>} = 7,
+        Identity: pallet_identity::{Pallet, Call, Storage, Event<T>} = 8,
 
         // Governance
         Sudo: pallet_sudo::{Pallet, Call, Storage, Config<T>, Event<T>} = 10,
@@ -1517,6 +1571,7 @@ construct_runtime!(
         TechnicalCommittee: pallet_collective::<Instance2>::{Pallet, Call, Storage, Origin<T>, Event<T>, Config<T>} = 13,
         Treasury: pallet_treasury::{Pallet, Call, Storage, Config, Event<T>} = 14,
         Scheduler: pallet_scheduler::{Pallet, Call, Storage, Event<T>} = 15,
+        Preimage: pallet_preimage::{Pallet, Call, Storage, Event<T>} = 16,
 
         // Parachain
         ParachainSystem: cumulus_pallet_parachain_system::{Pallet, Call, Config, Storage, Inherent, Event<T>, ValidateUnsigned} = 20,
@@ -1601,7 +1656,7 @@ pub type Executive = frame_executive::Executive<
     Block,
     frame_system::ChainContext<Runtime>,
     Runtime,
-    AllPallets,
+    AllPalletsWithSystem,
     (),
 >;
 
@@ -1726,14 +1781,20 @@ impl_runtime_apis! {
     }
 
     impl cumulus_primitives_core::CollectCollationInfo<Block> for Runtime {
-        fn collect_collation_info() -> cumulus_primitives_core::CollationInfo {
-            ParachainSystem::collect_collation_info()
+        fn collect_collation_info(header: &<Block as BlockT>::Header) -> cumulus_primitives_core::CollationInfo {
+            ParachainSystem::collect_collation_info(header)
         }
     }
 
     impl pallet_loans_rpc_runtime_api::LoansApi<Block, AccountId> for Runtime {
         fn get_account_liquidity(account: AccountId) -> Result<(Liquidity, Shortfall), DispatchError> {
             Loans::get_account_liquidity(&account)
+        }
+    }
+
+    impl pallet_router_rpc_runtime_api::RouterApi<Block, AccountId> for Runtime {
+        fn get_best_route(amount_in: Balance, token_in: CurrencyId, token_out: CurrencyId,) -> Result<(Vec<CurrencyId>, Balance), DispatchError> {
+            AMMRoute::get_best_route(amount_in, token_in, token_out)
         }
     }
 

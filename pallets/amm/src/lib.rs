@@ -44,15 +44,18 @@ use frame_support::{
 };
 use frame_system::{ensure_signed, pallet_prelude::OriginFor};
 
+pub use pallet::*;
 use sp_runtime::{
     traits::{AccountIdConversion, CheckedAdd, CheckedSub, IntegerSquareRoot, One, Zero},
-    ArithmeticError, DispatchError,
+    ArithmeticError, DispatchError, FixedU128,
 };
+use sp_std::vec::Vec;
 use sp_std::{cmp::min, ops::Div, result::Result};
 
-pub use pallet::*;
-
 use primitives::{Balance, CurrencyId, Ratio};
+use sp_runtime::traits::Saturating;
+use sp_runtime::FixedPointNumber;
+use sp_runtime::SaturatedConversion;
 use types::Pool;
 pub use weights::WeightInfo;
 
@@ -65,6 +68,8 @@ pub type BalanceOf<T, I = ()> =
 #[frame_support::pallet]
 pub mod pallet {
     use super::*;
+
+    pub type Amounts<T, I> = sp_std::vec::Vec<BalanceOf<T, I>>;
 
     #[pallet::config]
     pub trait Config<I: 'static = ()>: frame_system::Config {
@@ -112,6 +117,10 @@ pub mod pallet {
         /// Who/where to send the protocol fees
         #[pallet::constant]
         type ProtocolFeeReceiver: Get<Self::AccountId>;
+
+        /// How many routes we support at most
+        #[pallet::constant]
+        type MaxLengthRoute: Get<u32>;
     }
 
     #[pallet::error]
@@ -130,6 +139,8 @@ pub mod pallet {
         InsufficientAmountIn,
         /// Identical assets
         IdenticalAssets,
+        /// LP token has already been minted
+        LpTokenAlreadyExists,
     }
 
     #[pallet::event]
@@ -175,7 +186,7 @@ pub mod pallet {
         AssetIdOf<T, I>,
         Blake2_128Concat,
         AssetIdOf<T, I>,
-        Pool<AssetIdOf<T, I>, BalanceOf<T, I>>,
+        Pool<AssetIdOf<T, I>, BalanceOf<T, I>, T::BlockNumber>,
         OptionQuery,
     >;
 
@@ -332,6 +343,13 @@ pub mod pallet {
                 (liquidity_amounts.0, liquidity_amounts.1)
             };
 
+            // check that this is a new asset to avoid using an asset that
+            // already has tokens minted
+            ensure!(
+                T::Assets::total_issuance(lp_token_id).is_zero(),
+                Error::<T, I>::LpTokenAlreadyExists
+            );
+
             let mut pool = Pool::new(lp_token_id);
 
             Self::do_add_liquidity(
@@ -416,8 +434,10 @@ impl<T: Config<I>, I: 'static> Pallet<T, I> {
         Err(Error::<T, I>::IdenticalAssets.into())
     }
 
+    // given a pool, calculate the ideal liquidity amounts as a function of the current
+    // pool reserves ratio
     fn get_ideal_amounts(
-        pool: &Pool<AssetIdOf<T, I>, BalanceOf<T, I>>,
+        pool: &Pool<AssetIdOf<T, I>, BalanceOf<T, I>, T::BlockNumber>,
         (base_amount, quote_amount): (BalanceOf<T, I>, BalanceOf<T, I>),
     ) -> Result<(BalanceOf<T, I>, BalanceOf<T, I>), DispatchError> {
         log::trace!(
@@ -451,6 +471,62 @@ impl<T: Config<I>, I: 'static> Pallet<T, I> {
             .ok_or(ArithmeticError::Underflow)?)
     }
 
+    // given an input amount and a vector of assets, return a vector of output
+    // amounts
+    fn do_get_amounts_out(
+        amount_in: BalanceOf<T, I>,
+        path: Vec<AssetIdOf<T, I>>,
+    ) -> Result<Amounts<T, I>, DispatchError> {
+        let mut amounts_out: Amounts<T, I> = Vec::new();
+        amounts_out.resize(path.len(), 0u128);
+
+        amounts_out[0] = amount_in;
+        for i in 0..(path.len() - 1) {
+            let (reserve_in, reserve_out) = Self::get_reserves(path[i], path[i + 1])?;
+            let amount_out = Self::get_amount_out(amounts_out[i], reserve_in, reserve_out)?;
+            amounts_out[i + 1] = amount_out;
+        }
+
+        Ok(amounts_out)
+    }
+
+    // given an output amount and a vector of assets, return a vector of required input
+    // amounts to return the expected output amount
+    fn do_get_amounts_in(
+        amount_out: BalanceOf<T, I>,
+        path: Vec<AssetIdOf<T, I>>,
+    ) -> Result<Amounts<T, I>, DispatchError> {
+        let mut amounts_in: Amounts<T, I> = Vec::new();
+        amounts_in.resize(path.len(), 0u128);
+        let amount_len = amounts_in.len();
+
+        amounts_in[amount_len - 1] = amount_out;
+        for i in (1..(path.len())).rev() {
+            let (reserve_in, reserve_out) = Self::get_reserves(path[i - 1], path[i])?;
+            let amount_in = Self::get_amount_in(amounts_in[i], reserve_in, reserve_out)?;
+            amounts_in[i - 1] = amount_in;
+        }
+
+        Ok(amounts_in)
+    }
+
+    // extract the reserves from a pool after sorting assets
+    fn get_reserves(
+        asset_in: AssetIdOf<T, I>,
+        asset_out: AssetIdOf<T, I>,
+    ) -> Result<(BalanceOf<T, I>, BalanceOf<T, I>), DispatchError> {
+        let (is_inverted, base_asset, quote_asset) = Self::sort_assets((asset_in, asset_out))?;
+
+        let pool = Pools::<T, I>::try_get(base_asset, quote_asset)
+            .map_err(|_err| Error::<T, I>::PoolDoesNotExist)?;
+
+        if is_inverted {
+            Ok((pool.quote_amount, pool.base_amount))
+        } else {
+            Ok((pool.base_amount, pool.quote_amount))
+        }
+    }
+
     // given an input amount of an asset and pair reserves, returns the maximum output amount of the other asset
     //
     // reserveIn * reserveOut = (reserveIn + amountIn) * (reserveOut - amountOut)
@@ -458,7 +534,7 @@ impl<T: Config<I>, I: 'static> Pallet<T, I> {
     // amountIn * reserveOut = (reserveIn + amountIn) * amountOut
     //
     // amountOut = amountIn * reserveOut / (reserveIn + amountIn)
-    // amountIn  = amountIn * (1 - fee_percent)
+    // amountOut  = amountOut * (1 - fee_percent)
     fn get_amount_out(
         amount_in: BalanceOf<T, I>,
         reserve_in: BalanceOf<T, I>,
@@ -507,8 +583,7 @@ impl<T: Config<I>, I: 'static> Pallet<T, I> {
     // amountOut * reserveIn = amountIn * (reserveOut - amountOut)
     //
     // amountIn = amountOut * reserveIn / (reserveOut - amountOut)
-    // amountIn = amountIn / (1 - fee_percent)
-    #[allow(dead_code)]
+    // amountIn = (amountIn / (1 - fee_percent)) + 1
     fn get_amount_in(
         amount_out: BalanceOf<T, I>,
         reserve_in: BalanceOf<T, I>,
@@ -548,14 +623,62 @@ impl<T: Config<I>, I: 'static> Pallet<T, I> {
             .ok_or(ArithmeticError::Overflow)?)
     }
 
+    // update internal twap price oracle by calculating the number of blocks elapsed
+    // and update the pools cumulative prices
+    fn update_oracle(
+        pool: &mut Pool<AssetIdOf<T, I>, BalanceOf<T, I>, T::BlockNumber>,
+    ) -> Result<(), DispatchError> {
+        let block_timestamp = frame_system::Pallet::<T>::block_number();
+
+        if pool.block_timestamp_last != block_timestamp {
+            let time_elapsed: BalanceOf<T, I> = block_timestamp
+                .saturating_sub(pool.block_timestamp_last)
+                .saturated_into();
+
+            let price0_fraction: BalanceOf<T, I> =
+                FixedU128::saturating_from_rational(pool.quote_amount, pool.base_amount)
+                    .into_inner();
+            let price1_fraction: BalanceOf<T, I> =
+                FixedU128::saturating_from_rational(pool.base_amount, pool.quote_amount)
+                    .into_inner();
+
+            pool.price_0_cumulative_last = pool
+                .price_0_cumulative_last
+                .checked_add(price0_fraction)
+                .and_then(|r| time_elapsed.checked_mul(r))
+                .ok_or(ArithmeticError::Overflow)?;
+
+            pool.price_1_cumulative_last = pool
+                .price_1_cumulative_last
+                .checked_add(price1_fraction)
+                .and_then(|r| time_elapsed.checked_mul(r))
+                .ok_or(ArithmeticError::Overflow)?;
+
+            // updates timestamp last so `time_elapsed` is correctly calculated
+            pool.block_timestamp_last = block_timestamp;
+        }
+
+        Ok(())
+    }
+
     #[require_transactional]
     fn do_add_liquidity(
         who: &T::AccountId,
-        pool: &mut Pool<AssetIdOf<T, I>, BalanceOf<T, I>>,
+        pool: &mut Pool<AssetIdOf<T, I>, BalanceOf<T, I>, T::BlockNumber>,
         (ideal_base_amount, ideal_quote_amount): (BalanceOf<T, I>, BalanceOf<T, I>),
         (base_asset, quote_asset): (AssetIdOf<T, I>, AssetIdOf<T, I>),
     ) -> Result<(), DispatchError> {
         let total_supply = T::Assets::total_issuance(pool.lp_token_id);
+        pool.base_amount = pool
+            .base_amount
+            .checked_add(ideal_base_amount)
+            .ok_or(ArithmeticError::Overflow)?;
+        pool.quote_amount = pool
+            .quote_amount
+            .checked_add(ideal_quote_amount)
+            .ok_or(ArithmeticError::Overflow)?;
+
+        // lock a small amount of liquidty if the pool is first intitalized
         let liquidity = if total_supply.is_zero() {
             T::Assets::mint_into(
                 pool.lp_token_id,
@@ -583,14 +706,6 @@ impl<T: Config<I>, I: 'static> Pallet<T, I> {
 
         T::Assets::mint_into(pool.lp_token_id, who, liquidity)?;
 
-        pool.base_amount = pool
-            .base_amount
-            .checked_add(ideal_base_amount)
-            .ok_or(ArithmeticError::Overflow)?;
-        pool.quote_amount = pool
-            .quote_amount
-            .checked_add(ideal_quote_amount)
-            .ok_or(ArithmeticError::Overflow)?;
         T::Assets::transfer(
             base_asset,
             who,
@@ -625,7 +740,7 @@ impl<T: Config<I>, I: 'static> Pallet<T, I> {
     #[require_transactional]
     fn do_remove_liquidity(
         who: &T::AccountId,
-        pool: &mut Pool<AssetIdOf<T, I>, BalanceOf<T, I>>,
+        pool: &mut Pool<AssetIdOf<T, I>, BalanceOf<T, I>, T::BlockNumber>,
         liquidity: BalanceOf<T, I>,
         (base_asset, quote_asset): (AssetIdOf<T, I>, AssetIdOf<T, I>),
     ) -> Result<(BalanceOf<T, I>, BalanceOf<T, I>), DispatchError> {
@@ -670,7 +785,7 @@ impl<T: Config<I>, I: 'static> Pallet<T, I> {
 
     #[require_transactional]
     pub fn do_mint_protocol_fee(
-        pool: &mut Pool<AssetIdOf<T, I>, BalanceOf<T, I>>,
+        pool: &mut Pool<AssetIdOf<T, I>, BalanceOf<T, I>, T::BlockNumber>,
     ) -> Result<BalanceOf<T, I>, DispatchError> {
         // TODO: If we turn off protocol_fee later in runtime upgrade
         // this will reset root_k_last to zero which may not be good
@@ -728,11 +843,10 @@ impl<T: Config<I>, I: 'static> Pallet<T, I> {
         Ok(protocol_fees)
     }
 
-    fn do_trade(
+    fn do_swap(
         who: &T::AccountId,
         (asset_in, asset_out): (AssetIdOf<T, I>, AssetIdOf<T, I>),
         amount_in: BalanceOf<T, I>,
-        minimum_amount_out: BalanceOf<T, I>,
     ) -> Result<BalanceOf<T, I>, DispatchError> {
         let (is_inverted, base_asset, quote_asset) = Self::sort_assets((asset_in, asset_out))?;
 
@@ -756,11 +870,6 @@ impl<T: Config<I>, I: 'static> Pallet<T, I> {
 
                 let amount_out = Self::get_amount_out(amount_in, supply_in, supply_out)?;
 
-                ensure!(
-                    amount_out >= minimum_amount_out,
-                    Error::<T, I>::NotAnIdealPrice
-                );
-
                 let (new_supply_in, new_supply_out) = (
                     supply_in
                         .checked_add(amount_in)
@@ -778,18 +887,19 @@ impl<T: Config<I>, I: 'static> Pallet<T, I> {
                     pool.quote_amount = new_supply_out;
                 }
 
+                Self::update_oracle(pool)?;
+
                 T::Assets::transfer(asset_in, who, &Self::account_id(), amount_in, true)?;
                 T::Assets::transfer(asset_out, &Self::account_id(), who, amount_out, false)?;
 
                 log::trace!(
                     target: "amm::do_trade",
-                    "who: {:?}, asset_in: {:?}, asset_out: {:?}, amount_in: {:?}, amount_out: {:?}, minimum_amount_out: {:?}",
+                    "who: {:?}, asset_in: {:?}, asset_out: {:?}, amount_in: {:?}, amount_out: {:?}",
                     &who,
                     &asset_in,
                     &asset_out,
                     &amount_in,
                     &amount_out,
-                    &minimum_amount_out
                 );
 
                 Self::deposit_event(Event::<T, I>::Traded(
@@ -809,12 +919,43 @@ impl<T: Config<I>, I: 'static> Pallet<T, I> {
 impl<T: Config<I>, I: 'static> primitives::AMM<AccountIdOf<T>, AssetIdOf<T, I>, BalanceOf<T, I>>
     for Pallet<T, I>
 {
-    fn trade(
+    /// Based on the path specified and the available pool balances
+    /// this will return the amounts outs when trading the specified
+    /// amount in
+    fn get_amounts_out(
+        amount_in: BalanceOf<T, I>,
+        path: Vec<AssetIdOf<T, I>>,
+    ) -> Result<Vec<BalanceOf<T, I>>, DispatchError> {
+        let balances = Self::do_get_amounts_out(amount_in, path)?;
+        Ok(balances)
+    }
+
+    /// Based on the path specified and the available pool balances
+    /// this will return the amounts in needed to produce the specified
+    /// amount out
+    fn get_amounts_in(
+        amount_out: BalanceOf<T, I>,
+        path: Vec<AssetIdOf<T, I>>,
+    ) -> Result<Vec<BalanceOf<T, I>>, DispatchError> {
+        let balances = Self::do_get_amounts_in(amount_out, path)?;
+        Ok(balances)
+    }
+
+    /// Handles a "swap" on the AMM side for "who".
+    /// This will move the `amount_in` funds to the AMM PalletId,
+    /// trade `pair.0` to `pair.1` and return a result with the amount
+    /// of currency that was sent back to the user.
+    fn swap(
         who: &AccountIdOf<T>,
         pair: (AssetIdOf<T, I>, AssetIdOf<T, I>),
         amount_in: BalanceOf<T, I>,
-        minimum_amount_out: BalanceOf<T, I>,
-    ) -> Result<BalanceOf<T, I>, DispatchError> {
-        Self::do_trade(who, pair, amount_in, minimum_amount_out)
+    ) -> Result<(), DispatchError> {
+        Self::do_swap(who, pair, amount_in)?;
+        Ok(())
+    }
+
+    /// Returns a vector of all of the pools in storage
+    fn get_pools() -> Result<Vec<(AssetIdOf<T, I>, AssetIdOf<T, I>)>, DispatchError> {
+        Ok(Pools::<T, I>::iter_keys().collect())
     }
 }

@@ -17,7 +17,9 @@ use system::EnsureSignedBy;
 
 pub const DOT: CurrencyId = tokens::DOT;
 pub const XDOT: CurrencyId = tokens::XDOT;
+pub const KSM: CurrencyId = tokens::KSM;
 pub const SAMPLE_LP_TOKEN: CurrencyId = 42;
+pub const SAMPLE_LP_TOKEN_2: CurrencyId = 43;
 
 pub const ALICE: AccountId = AccountId(1);
 pub const BOB: AccountId = AccountId(2);
@@ -101,6 +103,7 @@ impl system::Config for Test {
     type SystemWeightInfo = ();
     type SS58Prefix = SS58Prefix;
     type OnSetCode = ();
+    type MaxConsumers = frame_support::traits::ConstU32<16>;
 }
 
 parameter_types! {
@@ -123,6 +126,7 @@ impl pallet_balances::Config for Test {
 parameter_types! {
     pub const AssetDeposit: u64 = 1;
     pub const ApprovalDeposit: u64 = 1;
+    pub const AssetAccountDeposit: u64 = 1;
     pub const StringLimit: u32 = 50;
     pub const MetadataDepositBase: u64 = 1;
     pub const MetadataDepositPerByte: u64 = 1;
@@ -137,6 +141,7 @@ impl pallet_assets::Config for Test {
     type AssetDeposit = AssetDeposit;
     type MetadataDepositBase = MetadataDepositBase;
     type MetadataDepositPerByte = MetadataDepositPerByte;
+    type AssetAccountDeposit = AssetAccountDeposit;
     type ApprovalDeposit = ApprovalDeposit;
     type StringLimit = StringLimit;
     type Freezer = ();
@@ -151,6 +156,7 @@ parameter_types! {
     pub const DefaultProtocolFeeReceiver: AccountId = AccountId(4_u64);
     pub const MinimumLiquidity: u128 = 1_000u128;
     pub const LockAccountId: AccountId = AccountId(1_u64);
+    pub const MaxLengthRoute: u8 = 10;
 }
 
 pub struct AliceCreatePoolOrigin;
@@ -171,6 +177,7 @@ impl pallet_amm::Config for Test {
     type ProtocolFee = DefaultProtocolFee;
     type MinimumLiquidity = MinimumLiquidity;
     type ProtocolFeeReceiver = DefaultProtocolFeeReceiver;
+    type MaxLengthRoute = MaxLengthRoute;
 }
 
 parameter_types! {
@@ -203,7 +210,9 @@ pub fn new_test_ext() -> sp_io::TestExternalities {
     ext.execute_with(|| {
         Assets::force_create(Origin::root(), tokens::DOT, ALICE, true, 1).unwrap();
         Assets::force_create(Origin::root(), tokens::XDOT, ALICE, true, 1).unwrap();
+        Assets::force_create(Origin::root(), tokens::KSM, ALICE, true, 1).unwrap();
         Assets::force_create(Origin::root(), SAMPLE_LP_TOKEN, ALICE, true, 1).unwrap();
+        Assets::force_create(Origin::root(), SAMPLE_LP_TOKEN_2, ALICE, true, 1).unwrap();
 
         Assets::mint(Origin::signed(ALICE), tokens::DOT, ALICE, 100_000_000).unwrap();
         Assets::mint(Origin::signed(ALICE), tokens::DOT, BOB, 100_000_000).unwrap();
@@ -214,7 +223,17 @@ pub fn new_test_ext() -> sp_io::TestExternalities {
         Assets::mint(Origin::signed(ALICE), tokens::XDOT, BOB, 100_000_000).unwrap();
         Assets::mint(Origin::signed(ALICE), tokens::XDOT, CHARLIE, 1000_000_000).unwrap();
         Assets::mint(Origin::signed(ALICE), tokens::XDOT, EVE, 1000_000_000).unwrap();
+
+        Assets::mint(Origin::signed(ALICE), tokens::KSM, ALICE, 100_000_000).unwrap();
+        Assets::mint(Origin::signed(ALICE), tokens::KSM, BOB, 100_000_000).unwrap();
     });
 
     ext
+}
+
+/// Progress to the given block, and then finalize the block.
+pub(crate) fn run_to_block(n: BlockNumber) {
+    for b in (System::block_number() + 1)..=n {
+        System::set_block_number(b);
+    }
 }
