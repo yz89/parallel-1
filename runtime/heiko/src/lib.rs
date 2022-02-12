@@ -29,6 +29,7 @@ use frame_support::{
     traits::{
         fungibles::{InspectMetadata, Mutate},
         Contains, EnsureOneOf, EqualPrivilegeOnly, Everything, InstanceFilter, Nothing,
+        OnRuntimeUpgrade,
     },
     PalletId,
 };
@@ -438,7 +439,7 @@ parameter_types! {
     pub const AssetDeposit: Balance = DOLLARS; // 1 UNIT deposit to create asset
     pub const ApprovalDeposit: Balance = EXISTENTIAL_DEPOSIT;
     pub const AssetsStringLimit: u32 = 50;
-    pub const AssetAccountDeposit: Balance = DOLLARS;
+    pub const AssetAccountDeposit: Balance = deposit(1, 16);
     /// Key = 32 bytes, Value = 36 bytes (32+1+1+1+1)
     // https://github.com/paritytech/substrate/blob/069917b/frame/assets/src/lib.rs#L257L271
     pub const MetadataDepositBase: Balance = deposit(1, 68);
@@ -482,10 +483,13 @@ parameter_types! {
     pub const StakingCurrency: CurrencyId = KSM;
     pub const LiquidCurrency: CurrencyId = XKSM;
     pub const XcmFees: Balance = 5_000_000_000; // 0.005KSM
+    pub const BondingDuration: BlockNumber = (28 + 1) * 6 * 1 * 3600 / 6; // 7Days + 6HOURS
 }
 
 impl pallet_liquid_staking::Config for Runtime {
     type Event = Event;
+    type Origin = Origin;
+    type Call = Call;
     type PalletId = StakingPalletId;
     type WeightInfo = ();
     type SelfParaId = ParachainInfo;
@@ -500,6 +504,8 @@ impl pallet_liquid_staking::Config for Runtime {
     type MinStake = MinStake;
     type MinUnstake = MinUnstake;
     type XCM = XcmHelper;
+    type BondingDuration = BondingDuration;
+    type RelayChainBlockNumberProvider = RelayChainBlockNumberProvider<Runtime>;
 }
 
 parameter_types! {
@@ -557,6 +563,7 @@ where
             .saturating_sub(1);
         let tip = 0;
         let extra: SignedExtra = (
+            frame_system::CheckNonZeroSender::<Runtime>::new(),
             frame_system::CheckSpecVersion::<Runtime>::new(),
             frame_system::CheckTxVersion::<Runtime>::new(),
             frame_system::CheckGenesis::<Runtime>::new(),
@@ -819,7 +826,7 @@ impl cumulus_pallet_xcm::Config for Runtime {
 impl cumulus_pallet_xcmp_queue::Config for Runtime {
     type Event = Event;
     type XcmExecutor = XcmExecutor<XcmConfig>;
-    type ExecuteOverweightOrigin = EnsureRoot<AccountId>;
+    type ExecuteOverweightOrigin = EnsureRootOrMoreThanHalfGeneralCouncil;
     type ChannelInfo = ParachainSystem;
     type VersionWrapper = PolkadotXcm;
 }
@@ -1636,6 +1643,7 @@ pub type SignedBlock = generic::SignedBlock<Block>;
 pub type BlockId = generic::BlockId<Block>;
 /// The SignedExtension to the basic transaction logic.
 pub type SignedExtra = (
+    frame_system::CheckNonZeroSender<Runtime>,
     frame_system::CheckSpecVersion<Runtime>,
     frame_system::CheckTxVersion<Runtime>,
     frame_system::CheckGenesis<Runtime>,
@@ -1657,8 +1665,27 @@ pub type Executive = frame_executive::Executive<
     frame_system::ChainContext<Runtime>,
     Runtime,
     AllPalletsWithSystem,
-    (),
+    SchedulerMigrationV3,
 >;
+
+// Migration for scheduler pallet to move from a plain Call to a CallOrHash.
+pub struct SchedulerMigrationV3;
+
+impl OnRuntimeUpgrade for SchedulerMigrationV3 {
+    fn on_runtime_upgrade() -> frame_support::weights::Weight {
+        Scheduler::migrate_v2_to_v3()
+    }
+
+    #[cfg(feature = "try-runtime")]
+    fn pre_upgrade() -> Result<(), &'static str> {
+        Scheduler::pre_migrate_to_v3()
+    }
+
+    #[cfg(feature = "try-runtime")]
+    fn post_upgrade() -> Result<(), &'static str> {
+        Scheduler::post_migrate_to_v3()
+    }
+}
 
 impl_runtime_apis! {
     impl sp_consensus_aura::AuraApi<Block, AuraId> for Runtime {

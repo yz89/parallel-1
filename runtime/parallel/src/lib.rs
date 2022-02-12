@@ -433,7 +433,7 @@ impl orml_xtokens::Config for Runtime {
 parameter_types! {
     pub const AssetDeposit: Balance = DOLLARS; // 1 UNIT deposit to create asset
     pub const ApprovalDeposit: Balance = EXISTENTIAL_DEPOSIT;
-    pub const AssetAccountDeposit: Balance = DOLLARS;
+    pub const AssetAccountDeposit: Balance = deposit(1, 16);
     pub const AssetsStringLimit: u32 = 50;
     /// Key = 32 bytes, Value = 36 bytes (32+1+1+1+1)
     // https://github.com/paritytech/substrate/blob/069917b/frame/assets/src/lib.rs#L257L271
@@ -478,10 +478,13 @@ parameter_types! {
     pub const StakingCurrency: CurrencyId = DOT;
     pub const LiquidCurrency: CurrencyId = XDOT;
     pub const XcmFees: Balance = 500_000_000; // 0.05DOT
+    pub const BondingDuration: BlockNumber = (28 + 1) * 6 * 4 * 3600 / 6; // 28Days + 1Day
 }
 
 impl pallet_liquid_staking::Config for Runtime {
     type Event = Event;
+    type Origin = Origin;
+    type Call = Call;
     type PalletId = StakingPalletId;
     type WeightInfo = ();
     type SelfParaId = ParachainInfo;
@@ -496,6 +499,8 @@ impl pallet_liquid_staking::Config for Runtime {
     type MinStake = MinStake;
     type MinUnstake = MinUnstake;
     type XCM = XcmHelper;
+    type BondingDuration = BondingDuration;
+    type RelayChainBlockNumberProvider = RelayChainBlockNumberProvider<Runtime>;
 }
 
 parameter_types! {
@@ -553,6 +558,7 @@ where
             .saturating_sub(1);
         let tip = 0;
         let extra: SignedExtra = (
+            frame_system::CheckNonZeroSender::<Runtime>::new(),
             frame_system::CheckSpecVersion::<Runtime>::new(),
             frame_system::CheckTxVersion::<Runtime>::new(),
             frame_system::CheckGenesis::<Runtime>::new(),
@@ -815,7 +821,7 @@ impl cumulus_pallet_xcm::Config for Runtime {
 impl cumulus_pallet_xcmp_queue::Config for Runtime {
     type Event = Event;
     type XcmExecutor = XcmExecutor<XcmConfig>;
-    type ExecuteOverweightOrigin = EnsureRoot<AccountId>;
+    type ExecuteOverweightOrigin = EnsureRootOrMoreThanHalfGeneralCouncil;
     type ChannelInfo = ParachainSystem;
     type VersionWrapper = PolkadotXcm;
 }
@@ -1619,6 +1625,7 @@ pub type SignedBlock = generic::SignedBlock<Block>;
 pub type BlockId = generic::BlockId<Block>;
 /// The SignedExtension to the basic transaction logic.
 pub type SignedExtra = (
+    frame_system::CheckNonZeroSender<Runtime>,
     frame_system::CheckSpecVersion<Runtime>,
     frame_system::CheckTxVersion<Runtime>,
     frame_system::CheckGenesis<Runtime>,
@@ -1640,11 +1647,30 @@ pub type Executive = frame_executive::Executive<
     frame_system::ChainContext<Runtime>,
     Runtime,
     AllPalletsWithSystem,
-    CrowdloanCreateBatch1Vault,
+    (SchedulerMigrationV3, CrowdloansMigrationV1),
 >;
 
-pub struct CrowdloanCreateBatch1Vault;
-impl OnRuntimeUpgrade for CrowdloanCreateBatch1Vault {
+// Migration for scheduler pallet to move from a plain Call to a CallOrHash.
+pub struct SchedulerMigrationV3;
+
+impl OnRuntimeUpgrade for SchedulerMigrationV3 {
+    fn on_runtime_upgrade() -> frame_support::weights::Weight {
+        Scheduler::migrate_v2_to_v3()
+    }
+
+    #[cfg(feature = "try-runtime")]
+    fn pre_upgrade() -> Result<(), &'static str> {
+        Scheduler::pre_migrate_to_v3()
+    }
+
+    #[cfg(feature = "try-runtime")]
+    fn post_upgrade() -> Result<(), &'static str> {
+        Scheduler::post_migrate_to_v3()
+    }
+}
+
+pub struct CrowdloansMigrationV1;
+impl OnRuntimeUpgrade for CrowdloansMigrationV1 {
     fn on_runtime_upgrade() -> Weight {
         pallet_crowdloans::migrations::v1::migrate::<Runtime>()
     }
