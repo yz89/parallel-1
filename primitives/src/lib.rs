@@ -81,7 +81,11 @@ pub type Timestamp = u64;
 
 pub type CurrencyId = u32;
 
-pub type ChainId = u8;
+pub type ChainId = u32;
+
+pub type ChainNonce = u64;
+
+pub type BridgeId = (ChainNonce, ChainNonce);
 
 pub const SECONDS_PER_YEAR: Timestamp = 365 * 24 * 60 * 60;
 
@@ -123,6 +127,11 @@ pub trait ExchangeRateProvider {
     fn get_exchange_rate() -> Rate;
 }
 
+pub trait LiquidStakingConvert<Balance> {
+    fn staking_to_liquid(amount: Balance) -> Option<Balance>;
+    fn liquid_to_staking(liquid_amount: Balance) -> Option<Balance>;
+}
+
 pub trait LiquidStakingCurrenciesProvider<CurrencyId> {
     fn get_staking_currency() -> Option<CurrencyId>;
     fn get_liquid_currency() -> Option<CurrencyId>;
@@ -158,4 +167,10 @@ pub trait AMM<AccountId, CurrencyId, Balance> {
     ) -> Result<(), DispatchError>;
 
     fn get_pools() -> Result<Vec<(CurrencyId, CurrencyId)>, DispatchError>;
+}
+
+#[derive(PartialEq, Eq, Copy, Clone, Encode, Decode, RuntimeDebug)]
+pub enum ArithmeticKind {
+    Addition,
+    Subtraction,
 }

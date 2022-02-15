@@ -1,7 +1,7 @@
 import fs from 'fs'
 import shell from 'shelljs'
 import dotenv from 'dotenv'
-import config from './config'
+import config from './config.json'
 import { blake2AsU8a } from '@polkadot/util-crypto'
 import { stringToU8a, bnToU8a, BN, u8aConcat, u8aToHex } from '@polkadot/util'
 import { decodeAddress, encodeAddress } from '@polkadot/keyring'
@@ -12,12 +12,16 @@ import { ApiPromise, Keyring, WsProvider } from '@polkadot/api'
 const EMPTY_U8A_32 = new Uint8Array(32)
 const BN_EIGHTEEN = new BN(18)
 const GiftPalletId = 'par/gift'
-const SovereignAccount = '5Ec4AhNtg8ug9xAezbpQom1Pz4PtM7q9bF12AC4T6Zp1PoCB'
+
+dotenv.config()
 
 const createAddress = (id: string) =>
   encodeAddress(u8aConcat(stringToU8a(`modl${id}`), EMPTY_U8A_32).subarray(0, 32))
 
-dotenv.config()
+export const sovereignAccountOf = (paraId: number): string =>
+  encodeAddress(
+    u8aConcat(stringToU8a('para'), bnToU8a(paraId, 32, true), EMPTY_U8A_32).subarray(0, 32)
+  )
 
 function sleep(ms: number) {
   return new Promise(resolve => setTimeout(resolve, ms))
@@ -185,7 +189,7 @@ async function relay() {
   if (relayAsset && relayAsset.balances.length) {
     call.push(
       ...relayAsset.balances.map(([account, balance]) =>
-        api.tx.balances.transfer(SovereignAccount, balance)
+        api.tx.balances.transfer(sovereignAccountOf(config.paraId), balance)
       )
     )
   }

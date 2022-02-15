@@ -1,13 +1,11 @@
 use codec::{Decode, Encode};
 
 use super::{BalanceOf, Config};
-use frame_support::traits::tokens::Balance as BalanceT;
-use primitives::ExchangeRateProvider;
+use frame_support::{dispatch::DispatchResult, traits::tokens::Balance as BalanceT};
+use primitives::{ArithmeticKind, LiquidStakingConvert};
 use scale_info::TypeInfo;
-use sp_runtime::{
-    traits::Zero, ArithmeticError, DispatchError, FixedPointNumber, FixedPointOperand, RuntimeDebug,
-};
-use sp_std::{cmp::Ordering, vec::Vec};
+use sp_runtime::{traits::Zero, ArithmeticError, DispatchError, FixedPointOperand, RuntimeDebug};
+use sp_std::{cmp::Ordering, result::Result, vec::Vec};
 
 /// The matching pool's total stake & unstake amount in one era
 #[derive(Copy, Clone, Eq, PartialEq, Default, Encode, Decode, RuntimeDebug, TypeInfo)]
@@ -24,16 +22,14 @@ impl<Balance: BalanceT + FixedPointOperand> MatchingLedger<Balance> {
     /// `unbonding_amount` is the total amount of the unbonding asset on the relaychain.
     ///
     /// the returned tri-tuple is formed as `(bond_amount, rebond_amount, unbond_amount)`.
-    pub fn matching<T: ExchangeRateProvider>(
+    pub fn matching<T: LiquidStakingConvert<Balance>>(
         &mut self,
         unbonding_amount: Balance,
     ) -> Result<(Balance, Balance, Balance), DispatchError> {
         use Ordering::*;
 
-        let exchange_rate = T::get_exchange_rate();
-        let unstake_asset_amout = exchange_rate
-            .checked_mul_int(self.total_unstake_amount)
-            .ok_or(ArithmeticError::Overflow)?;
+        let unstake_asset_amout =
+            T::liquid_to_staking(self.total_unstake_amount).ok_or(ArithmeticError::Overflow)?;
 
         let (bond_amount, rebond_amount, unbond_amount) = if matches!(
             self.total_stake_amount.cmp(&unstake_asset_amout),
@@ -59,13 +55,55 @@ impl<Balance: BalanceT + FixedPointOperand> MatchingLedger<Balance> {
         if unbond_amount.is_zero() {
             self.total_unstake_amount = Zero::zero();
         } else {
-            self.total_unstake_amount = exchange_rate
-                .reciprocal()
-                .and_then(|r| r.checked_mul_int(unbond_amount))
-                .ok_or(ArithmeticError::Overflow)?;
+            self.total_unstake_amount =
+                T::staking_to_liquid(unbond_amount).ok_or(ArithmeticError::Overflow)?;
         }
 
         Ok((bond_amount, rebond_amount, unbond_amount))
+    }
+
+    pub fn update_total_stake_amount(
+        &mut self,
+        amount: Balance,
+        kind: ArithmeticKind,
+    ) -> DispatchResult {
+        match kind {
+            ArithmeticKind::Addition => {
+                self.total_stake_amount = self
+                    .total_stake_amount
+                    .checked_add(&amount)
+                    .ok_or(ArithmeticError::Overflow)?;
+            }
+            ArithmeticKind::Subtraction => {
+                self.total_stake_amount = self
+                    .total_stake_amount
+                    .checked_sub(&amount)
+                    .ok_or(ArithmeticError::Underflow)?;
+            }
+        }
+        Ok(())
+    }
+
+    pub fn update_total_unstake_amount(
+        &mut self,
+        amount: Balance,
+        kind: ArithmeticKind,
+    ) -> DispatchResult {
+        match kind {
+            ArithmeticKind::Addition => {
+                self.total_unstake_amount = self
+                    .total_unstake_amount
+                    .checked_add(&amount)
+                    .ok_or(ArithmeticError::Overflow)?;
+            }
+            ArithmeticKind::Subtraction => {
+                self.total_unstake_amount = self
+                    .total_unstake_amount
+                    .checked_sub(&amount)
+                    .ok_or(ArithmeticError::Underflow)?;
+            }
+        }
+        Ok(())
     }
 }
 

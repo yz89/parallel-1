@@ -54,7 +54,9 @@ pub mod pallet {
         pallet_prelude::{BlockNumberFor, OriginFor},
     };
     use pallet_xcm::ensure_response;
-    use primitives::{Balance, CurrencyId, LeasePeriod, ParaId, TrieIndex, VaultId};
+    use primitives::{
+        ArithmeticKind, Balance, CurrencyId, LeasePeriod, ParaId, TrieIndex, VaultId,
+    };
     use sp_runtime::{
         traits::{AccountIdConversion, BlockNumberProvider, Hash, Zero},
         ArithmeticError, DispatchError,
@@ -1038,6 +1040,8 @@ pub mod pallet {
                     Self::contribution_kill(vault.trie_index, &who, kind);
                 }
             }
+
+            Vaults::<T>::insert((&crowdloan, &lease_start, &lease_end), vault);
 
             if all_refunded {
                 Self::deposit_event(Event::<T>::AllRefunded(crowdloan, (lease_start, lease_end)));
