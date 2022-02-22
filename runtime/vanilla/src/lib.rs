@@ -30,7 +30,8 @@ use frame_support::{
     log, match_type,
     traits::{
         fungibles::{InspectMetadata, Mutate},
-        Contains, EnsureOneOf, EqualPrivilegeOnly, Everything, InstanceFilter, Nothing,
+        ChangeMembers, Contains, EnsureOneOf, EqualPrivilegeOnly, Everything, InstanceFilter,
+        Nothing,
     },
     PalletId,
 };
@@ -479,13 +480,13 @@ impl pallet_loans::Config for Runtime {
 parameter_types! {
     pub const StakingPalletId: PalletId = PalletId(*b"par/lqsk");
     pub const DerivativeIndex: u16 = 0;
-    pub const UnstakeQueueCap: u32 = 1000;
+    pub const EraLength: BlockNumber = 1 * 3 * 60 / 6;
     pub const MinStake: Balance = 100_000_000_000; // 0.1KSM
     pub const MinUnstake: Balance = 50_000_000_000; // 0.05KSM
     pub const StakingCurrency: CurrencyId = KSM;
     pub const LiquidCurrency: CurrencyId = XKSM;
     pub const XcmFees: Balance = 5_000_000_000; // 0.005KSM
-    pub const BondingDuration: BlockNumber = (3 + 1) * 1 * 3 * 60 / 6; // 9Minutes + 1.8Minute
+    pub const BondingDuration: u32 = 3; // 9Minutes
 }
 
 impl pallet_liquid_staking::Config for Runtime {
@@ -502,7 +503,7 @@ impl pallet_liquid_staking::Config for Runtime {
     type LiquidCurrency = LiquidCurrency;
     type DerivativeIndex = DerivativeIndex;
     type XcmFees = XcmFees;
-    type UnstakeQueueCap = UnstakeQueueCap;
+    type EraLength = EraLength;
     type MinStake = MinStake;
     type MinUnstake = MinUnstake;
     type XCM = XcmHelper;
@@ -1350,6 +1351,25 @@ parameter_types! {
     pub const BridgeMaxMembers: u32 = 100;
 }
 
+pub struct ChangeBridgeMembers;
+impl ChangeMembers<AccountId> for ChangeBridgeMembers {
+    fn change_members_sorted(_incoming: &[AccountId], _outgoing: &[AccountId], new: &[AccountId]) {
+        if let Err(e) = Bridge::change_vote_threshold() {
+            log::error!(
+                target: "bridge::change_members_sorted",
+                "Failed to set vote threshold: {:?}",
+                e,
+            );
+        } else {
+            log::info!(
+                target: "bridge::change_members_sorted",
+                "Succeeded to set votde threshold, total members: {:?}",
+                new.len(),
+            );
+        };
+    }
+}
+
 type BridgeMembershipInstance = pallet_membership::Instance6;
 impl pallet_membership::Config<BridgeMembershipInstance> for Runtime {
     type Event = Event;
@@ -1359,7 +1379,7 @@ impl pallet_membership::Config<BridgeMembershipInstance> for Runtime {
     type ResetOrigin = EnsureRootOrMoreThanHalfGeneralCouncil;
     type PrimeOrigin = EnsureRootOrMoreThanHalfGeneralCouncil;
     type MembershipInitialized = ();
-    type MembershipChanged = ();
+    type MembershipChanged = ChangeBridgeMembers;
     type MaxMembers = BridgeMaxMembers;
     type WeightInfo = weights::pallet_membership::WeightInfo<Runtime>;
 }
