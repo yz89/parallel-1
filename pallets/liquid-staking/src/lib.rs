@@ -503,7 +503,6 @@ pub mod pallet {
                 // TODO: validate staking_ledger using storage proof
                 ensure!(
                     ledger.unlocking == staking_ledger.unlocking
-                        && ledger.active == staking_ledger.active,
                     Error::<T>::InvalidStakingLedger
                 );
                 *ledger = staking_ledger.clone();
