@@ -2,7 +2,7 @@ use super::*;
 use crate::mock::*;
 use frame_support::{assert_noop, assert_ok};
 use frame_system::RawOrigin;
-use primitives::AMM as _;
+use primitives::{tokens, AMM as _};
 
 const MINIMUM_LIQUIDITY: u128 = 1_000;
 
@@ -21,6 +21,38 @@ fn create_pool_should_work() {
         assert_eq!(Assets::total_issuance(SAMPLE_LP_TOKEN), 1_414);
         // should be issuance minus the min liq locked
         assert_eq!(Assets::balance(SAMPLE_LP_TOKEN, BOB), 414);
+    })
+}
+
+#[test]
+fn double_liquidity_correct_liq_ratio_should_work() {
+    new_test_ext().execute_with(|| {
+        assert_ok!(AMM::create_pool(
+            RawOrigin::Signed(ALICE).into(),              // Origin
+            (DOT, KSM), // Currency pool, in which liquidity will be added
+            (15_000_000_000_000, 50_000_000_000_000_000), // Liquidity amounts to be added in pool
+            FRANK,      // LPToken receiver
+            SAMPLE_LP_TOKEN, // Liquidity pool share representative token
+        ));
+
+        // total liquidity after pool created
+        let total_liquidity_tokens = Assets::total_issuance(SAMPLE_LP_TOKEN);
+
+        assert_ok!(AMM::add_liquidity(
+            RawOrigin::Signed(FRANK).into(),              // Origin
+            (DOT, KSM), // Currency pool, in which liquidity will be added
+            (15_000_000_000_000, 50_000_000_000_000_000), // Liquidity amounts to be added in pool
+            (15_000_000_000_000, 50_000_000_000_000_000), // specifying its worst case ratio when pool already
+        ));
+
+        let total_liquidity_tokens_after_double = Assets::total_issuance(SAMPLE_LP_TOKEN);
+        let liquidity_recieved = total_liquidity_tokens_after_double - total_liquidity_tokens;
+
+        // recieved liquidity should be half of total liquidity
+        assert_eq!(
+            liquidity_recieved as f64 / total_liquidity_tokens_after_double as f64,
+            0.5
+        );
     })
 }
 
@@ -718,6 +750,21 @@ fn amount_in_uneven_should_work() {
 }
 
 #[test]
+fn supply_out_should_larger_than_amount_out() {
+    // Test case for Panic when amount_out >= supply_out
+    new_test_ext().execute_with(|| {
+        let amount_out = 100_00;
+        let supply_in = 100_000;
+        let supply_out = 100_00;
+
+        assert_noop!(
+            AMM::get_amount_in(amount_out, supply_in, supply_out),
+            Error::<Test>::InsufficientSupplyOut
+        );
+    })
+}
+
+#[test]
 fn amount_out_and_in_should_work() {
     new_test_ext().execute_with(|| {
         let amount_out = 1_000;
@@ -829,56 +876,292 @@ fn oracle_big_block_no_overflow() {
     })
 }
 
+// #[test]
+// fn oracle_huge_block_should_work() {
+//     // we may want to omit this test because it take >5 minutes to run
+//     new_test_ext().execute_with(|| {
+//         let trader = FRANK;
+//
+//         assert_ok!(AMM::create_pool(
+//             RawOrigin::Signed(ALICE).into(),                     // Origin
+//             (DOT, KSM), // Currency pool, in which liquidity will be added
+//             (9_999_650_729_873_433, 30_001_051_000_000_000_000), // Liquidity amounts to be added in pool
+//             FRANK,                                               // LPToken receiver
+//             SAMPLE_LP_TOKEN, // Liquidity pool share representative token
+//         ));
+//
+//         assert_eq!(AMM::pools(DOT, KSM).unwrap().block_timestamp_last, 0);
+//         assert_eq!(AMM::pools(DOT, KSM).unwrap().price_0_cumulative_last, 0);
+//         assert_eq!(AMM::pools(DOT, KSM).unwrap().price_1_cumulative_last, 0);
+//
+//         // let mut big_block = 100_000_000;
+//         let mut big_block = 10_000_000;
+//
+//         // 100 Million blocks should take ~42.5 years to create at ~12 seconds a block
+//
+//         // Calculations
+//         // avg_block_time = (1645493658865 - 1639798590500) / (424950 - 1)
+//         // avg_block_time == 13401.769071112063 == 13.4 seconds per block
+//         // total_time = (avg_block_time * 100_000_000) / (1000 * 60 * 60 * 24 * 365)
+//         // total_time == 42.496730945941344
+//
+//         run_to_block(big_block);
+//
+//         for _ in 0..5 {
+//             big_block += 100_000;
+//             run_to_block(big_block);
+//             assert_ok!(AMM::swap(&trader, (DOT, KSM), 1000));
+//         }
+//
+//         assert_eq!(
+//             AMM::pools(DOT, KSM).unwrap().block_timestamp_last,
+//             big_block
+//         );
+//         assert_eq!(
+//             AMM::pools(DOT, KSM).unwrap().price_0_cumulative_last,
+//             // 301521093780_997938040922975491
+//             31502203827_864919649515113416
+//         );
+//         assert_eq!(
+//             AMM::pools(DOT, KSM).unwrap().price_1_cumulative_last,
+//             // 33497_656410519841854583
+//             3499_755147367804281224
+//         );
+//     })
+// }
+
 #[test]
-fn oracle_huge_block_should_work() {
-    // we may want to omit this test because it take >5 minutes to run
+fn create_pool_large_amount_should_work() {
+    /*
+    With ample supplies
+    Recheck values
+    */
     new_test_ext().execute_with(|| {
-        let trader = FRANK;
+        Assets::mint(
+            RawOrigin::Signed(ALICE).into(),
+            tokens::DOT,
+            ALICE,
+            3_000_000_000_000_000_000_000,
+        )
+        .ok();
+        Assets::mint(
+            RawOrigin::Signed(ALICE).into(),
+            tokens::XDOT,
+            ALICE,
+            2_000_000_000_000_000_000_000,
+        )
+        .ok();
 
         assert_ok!(AMM::create_pool(
-            RawOrigin::Signed(ALICE).into(),                     // Origin
-            (DOT, KSM), // Currency pool, in which liquidity will be added
-            (9_999_650_729_873_433, 30_001_051_000_000_000_000), // Liquidity amounts to be added in pool
-            FRANK,                                               // LPToken receiver
+            RawOrigin::Signed(ALICE).into(),                            // Origin
+            (DOT, XDOT), // Currency pool, in which liquidity will be added
+            (1_000_000_000_000_000_000, 2_000_000_000_000_000_000_000), // Liquidity amounts to be added in pool
+            ALICE,                                                      // LPToken receiver
             SAMPLE_LP_TOKEN, // Liquidity pool share representative token
         ));
 
-        assert_eq!(AMM::pools(DOT, KSM).unwrap().block_timestamp_last, 0);
-        assert_eq!(AMM::pools(DOT, KSM).unwrap().price_0_cumulative_last, 0);
-        assert_eq!(AMM::pools(DOT, KSM).unwrap().price_1_cumulative_last, 0);
-
-        // let mut big_block = 100_000_000;
-        let mut big_block = 10_000_000;
-
-        // 100 Million blocks should take ~42.5 years to create at ~12 seconds a block
-
-        // Calculations
-        // avg_block_time = (1645493658865 - 1639798590500) / (424950 - 1)
-        // avg_block_time == 13401.769071112063 == 13.4 seconds per block
-        // total_time = (avg_block_time * 100_000_000) / (1000 * 60 * 60 * 24 * 365)
-        // total_time == 42.496730945941344
-
-        run_to_block(big_block);
-
-        for _ in 0..5 {
-            big_block += 100_000;
-            run_to_block(big_block);
-            assert_ok!(AMM::swap(&trader, (DOT, KSM), 1000));
-        }
-
         assert_eq!(
-            AMM::pools(DOT, KSM).unwrap().block_timestamp_last,
-            big_block
+            AMM::pools(XDOT, DOT).unwrap().base_amount,
+            2_000_000_000_000_000_000_000
         );
         assert_eq!(
-            AMM::pools(DOT, KSM).unwrap().price_0_cumulative_last,
-            // 301521093780_997938040922975491
-            31502203827_864919649515113416
+            Assets::total_issuance(SAMPLE_LP_TOKEN),
+            447_213_595_499_957_939_28
         );
+        // should be issuance minus the min liq locked
         assert_eq!(
-            AMM::pools(DOT, KSM).unwrap().price_1_cumulative_last,
-            // 33497_656410519841854583
-            3499_755147367804281224
+            Assets::balance(SAMPLE_LP_TOKEN, ALICE),
+            447_213_595_499_957_939_28
         );
+    })
+}
+
+#[test]
+fn create_pool_large_amount_from_an_account_without_sufficient_amount_of_tokens_should_not_panic() {
+    /*
+    With ample supplies for Alice and less for Bob :'(
+    `create_pool` with Large amount panic for Bob
+    Recheck values
+    */
+    new_test_ext().execute_with(|| {
+        Assets::mint(
+            RawOrigin::Signed(ALICE).into(),
+            tokens::DOT,
+            ALICE,
+            3_000_000_000_000_000_000_000,
+        )
+        .ok();
+        Assets::mint(
+            RawOrigin::Signed(ALICE).into(),
+            tokens::XDOT,
+            ALICE,
+            2_000_000_000_000_000_000_000,
+        )
+        .ok();
+
+        // Creating for BOB
+        // This Panics!
+        assert_noop!(
+            AMM::create_pool(
+                RawOrigin::Signed(ALICE).into(),                            // Origin
+                (DOT, XDOT), // Currency pool, in which liquidity will be added
+                (1_000_000_000_000_000_000, 2_000_000_000_000_000_000_000), // Liquidity amounts to be added in pool
+                BOB,                                                        // LPToken receiver
+                SAMPLE_LP_TOKEN, // Liquidity pool share representative token
+            ),
+            pallet_assets::Error::<Test>::BalanceLow
+        );
+    })
+}
+
+#[ignore]
+#[test]
+fn do_add_liquidity_exact_amounts_should_work() {
+    /*
+    substrate->frame->assets->src->functions.rs
+    ensure!(f.best_effort || actual >= amount, Error::<T, I>::BalanceLow);   // Fails here
+    replica of `add_liquidity_should_work` with larger values
+    Loss of precision?
+    */
+    new_test_ext().execute_with(|| {
+        // Already deposited 100000000
+        Assets::mint(
+            RawOrigin::Signed(ALICE).into(),
+            tokens::DOT,
+            ALICE,
+            999_999_999_999_900_000_000,
+        )
+        .ok();
+
+        // Already deposited 100000000
+        Assets::mint(
+            RawOrigin::Signed(ALICE).into(),
+            tokens::XDOT,
+            ALICE,
+            199_999_999_999_990_000_000_0,
+        )
+        .ok();
+
+        assert_ok!(AMM::create_pool(
+            RawOrigin::Signed(ALICE).into(),                            // Origin
+            (DOT, XDOT), // Currency pool, in which liquidity will be added
+            (1_000_000_000_000_000_000, 2_000_000_000_000_000_000_000), // Liquidity amounts to be added in pool
+            ALICE,                                                      // LPToken receiver
+            SAMPLE_LP_TOKEN, // Liquidity pool share representative token
+        ));
+        assert_ok!(AMM::add_liquidity(
+            RawOrigin::Signed(ALICE).into(),                            // Origin
+            (DOT, XDOT), // Currency pool, in which liquidity will be added
+            (1_000_000_000_000_000_000, 2_000_000_000_000_000_000_000), // Liquidity amounts to be added in pool
+            (5, 5), // specifying its worst case ratio when pool already
+        ));
+
+        assert_eq!(AMM::pools(XDOT, DOT).unwrap().base_amount, 4_000);
+    })
+}
+
+#[test]
+fn do_add_liquidity_large_amounts_should_work() {
+    /*
+    With ample supplies
+     */
+
+    new_test_ext().execute_with(|| {
+        Assets::mint(
+            RawOrigin::Signed(ALICE).into(),
+            tokens::DOT,
+            ALICE,
+            3_000_000_000_000_000_000_000,
+        )
+        .ok();
+        Assets::mint(
+            RawOrigin::Signed(ALICE).into(),
+            tokens::XDOT,
+            ALICE,
+            2_000_000_000_000_000_000_000,
+        )
+        .ok();
+
+        assert_ok!(AMM::create_pool(
+            RawOrigin::Signed(ALICE).into(), // Origin
+            (DOT, XDOT),                     // Currency pool, in which liquidity will be added
+            (
+                1_000_000_000_000_000_000_000, // Either base amount or quote amount
+                2_000_000_000_000_000_000_000
+            ), // Liquidity amounts to be added in pool
+            ALICE,                           // LPToken receiver
+            SAMPLE_LP_TOKEN,                 // Liquidity pool share representative token
+        ));
+    })
+}
+
+#[test]
+fn handling_fees_should_work() {
+    new_test_ext().execute_with(|| {
+        // Pool gets created and BOB should recieve all of the LP tokens (minus the min amount)
+        //
+        assert_ok!(AMM::create_pool(
+            RawOrigin::Signed(ALICE).into(),    // Origin
+            (DOT, XDOT),                        // Currency pool, in which liquidity will be added
+            (100_000_000_000, 100_000_000_000), // Liquidity amounts to be added in pool
+            BOB,                                // LPToken receiver
+            SAMPLE_LP_TOKEN                     // Liquidity pool share representative token
+        ));
+
+        // Another user makes a swap that should generate fees for the LP provider and the protocol
+        assert_ok!(AMM::swap(&FRANK, (DOT, XDOT), 6_000_000));
+
+        // we can check the total balance
+        //
+        // no extra fees should be minted becuase liquidty has not been added or removed
+        //
+        assert_eq!(Assets::total_issuance(SAMPLE_LP_TOKEN), 100_000_000_000);
+
+        // bob should have all of the fees minus the min amount burned/locked
+        assert_eq!(
+            Assets::balance(SAMPLE_LP_TOKEN, BOB),
+            100_000_000_000 - MINIMUM_LIQUIDITY
+        );
+
+        // now we withdraw the fees and at this point we should mint tokens
+        // for the protcol proportional to 1/6 of the total fees generated
+
+        // we know that 18_000 fees should be collected and ~3_000 are for the protocol
+        let total_fees_collected = 6_000_000.0 * 0.003;
+        let fees_to_be_collected_by_protocol = total_fees_collected * (1.0 / 6.0);
+        assert_eq!(fees_to_be_collected_by_protocol, 3000.0);
+
+        // expand the math to calculate exact amout of fees to dilute lp total supply
+        let prop_of_total_fee = 1.0 / 6.0;
+        let scalar = (1.0 / prop_of_total_fee) - 1.0;
+        assert_eq!(scalar, 5.0);
+
+        let total_lp_token_supply = 100_000_000_000.0;
+        let old_root_k = (100_000_000_000f64 * 100_000_000_000f64).sqrt();
+        let new_root_k = (99_994_018_358f64 * 100_006_000_000f64).sqrt();
+        let root_k_growth = new_root_k - old_root_k;
+
+        let numerator = total_lp_token_supply * root_k_growth;
+        let denominator = new_root_k * scalar + old_root_k;
+        let rewards_to_mint = numerator / denominator;
+
+        assert_eq!(old_root_k, 100_000_000_000.0); // 100_000_000_000
+        assert_eq!(new_root_k, 100_000_008_999.55034); // 100_000_008_999
+        assert_eq!(root_k_growth, 8999.550338745117); // 8999
+        assert_eq!(numerator, 899955033874511.8); // 899_900_000_000_000
+        assert_eq!(denominator, 600000044997.7517); // 600_000_044_995
+        assert_eq!(rewards_to_mint, 1499.9249439687692); // 1499
+
+        assert_ok!(AMM::remove_liquidity(
+            RawOrigin::Signed(PROTOCOL_FEE_RECEIVER).into(),
+            (DOT, XDOT),
+            1_499,
+        ));
+
+        // PROTOCOL_FEE_RECEIVER should have slightly less then 3_000 total rewards
+        // split bewteen the two pools - the small difference is due to rounding errors
+        assert_eq!(Assets::balance(DOT, PROTOCOL_FEE_RECEIVER), 1499);
+
+        assert_eq!(Assets::balance(XDOT, PROTOCOL_FEE_RECEIVER), 1498);
     })
 }

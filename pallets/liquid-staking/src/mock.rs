@@ -2,7 +2,9 @@ use frame_support::{
     construct_runtime,
     dispatch::Weight,
     parameter_types, sp_io,
-    traits::{EnsureOneOf, Everything, GenesisBuild, Nothing, SortedMembers},
+    traits::{
+        tokens::BalanceConversion, EnsureOneOf, Everything, GenesisBuild, Nothing, SortedMembers,
+    },
     weights::constants::WEIGHT_PER_SECOND,
     PalletId,
 };
@@ -12,14 +14,16 @@ use pallet_xcm::XcmPassthrough;
 use polkadot_parachain::primitives::Sibling;
 
 use polkadot_runtime_parachains::configuration::HostConfiguration;
-use primitives::{currency::MultiCurrencyAdapter, tokens::*, Balance, ParaId, Rate, Ratio};
+use primitives::{
+    currency::MultiCurrencyAdapter, tokens::*, Balance, EraIndex, ParaId, Rate, Ratio,
+};
 use sp_core::H256;
 use sp_runtime::{
     generic,
     traits::{
         AccountIdConversion, AccountIdLookup, BlakeTwo256, BlockNumberProvider, Convert, One, Zero,
     },
-    AccountId32,
+    AccountId32, DispatchError,
     MultiAddress::Id,
 };
 pub use xcm::latest::prelude::*;
@@ -88,9 +92,10 @@ parameter_types! {
 }
 
 pub struct GiftConvert;
-impl Convert<Balance, Balance> for GiftConvert {
-    fn convert(_amount: Balance) -> Balance {
-        return Zero::zero();
+impl BalanceConversion<Balance, CurrencyId, Balance> for GiftConvert {
+    type Error = DispatchError;
+    fn to_asset_balance(_balance: Balance, _asset_id: CurrencyId) -> Result<Balance, Self::Error> {
+        Ok(Zero::zero())
     }
 }
 
@@ -102,6 +107,7 @@ pub type LocalAssetTransactor = MultiCurrencyAdapter<
     LocationToAccountId,
     CurrencyIdConvert,
     NativeCurrencyId,
+    ExistentialDeposit,
     GiftAccount,
     GiftConvert,
 >;
@@ -363,14 +369,16 @@ impl<T: cumulus_pallet_parachain_system::Config> BlockNumberProvider
 parameter_types! {
     pub const StakingPalletId: PalletId = PalletId(*b"par/lqsk");
     pub const DerivativeIndex: u16 = 0;
-    pub const EraLength: u32 = 0;
+    pub const EraLength: BlockNumber = 10;
     pub SelfParaId: ParaId = para_a_id();
     pub const MinStake: Balance = 0;
     pub const MinUnstake: Balance = 0;
     pub const StakingCurrency: CurrencyId = KSM;
     pub const LiquidCurrency: CurrencyId = XKSM;
     pub const XcmFees: Balance = 0;
-    pub const BondingDuration: BlockNumber = 0;
+    pub const BondingDuration: EraIndex = 3;
+    pub const NumSlashingSpans: u32 = 0;
+    pub static DerivativeIndexList: Vec<u16> = vec![0];
 }
 
 impl crate::Config for Test {
@@ -384,6 +392,7 @@ impl crate::Config for Test {
     type StakingCurrency = StakingCurrency;
     type LiquidCurrency = LiquidCurrency;
     type DerivativeIndex = DerivativeIndex;
+    type DerivativeIndexList = DerivativeIndexList;
     type XcmFees = XcmFees;
     type Assets = Assets;
     type RelayOrigin = RelayOrigin;
@@ -393,6 +402,8 @@ impl crate::Config for Test {
     type XCM = XcmHelper;
     type BondingDuration = BondingDuration;
     type RelayChainBlockNumberProvider = RelayChainBlockNumberProvider<Test>;
+    type Members = BobOrigin;
+    type NumSlashingSpans = NumSlashingSpans;
 }
 
 parameter_types! {
@@ -491,7 +502,7 @@ pub(crate) fn new_test_ext() -> sp_io::TestExternalities {
             Origin::signed(ALICE),
             KSM,
             Id(XcmHelper::account_id()),
-            ksm(30f64),
+            ksm(100f64),
         )
         .unwrap();
 

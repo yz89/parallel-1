@@ -13,33 +13,16 @@
 // limitations under the License.
 
 use heiko_runtime::{
-    opaque::SessionKeys,
-    BalancesConfig,
-    CollatorSelectionConfig,
-    DemocracyConfig,
-    GeneralCouncilConfig,
-    GeneralCouncilMembershipConfig,
-    GenesisConfig,
-    LiquidStakingConfig,
-    OracleMembershipConfig,
-    ParachainInfoConfig,
-    PolkadotXcmConfig,
-    SessionConfig,
-    SudoConfig,
-    SystemConfig,
-    TechnicalCommitteeMembershipConfig,
-    ValidatorFeedersMembershipConfig,
-    VestingConfig,
-    WASM_BINARY,
-    // BridgeMembershipConfig
+    opaque::SessionKeys, BalancesConfig, BridgeMembershipConfig, CollatorSelectionConfig,
+    DemocracyConfig, GeneralCouncilConfig, GeneralCouncilMembershipConfig, GenesisConfig,
+    LiquidStakingAgentsMembershipConfig, LiquidStakingConfig, OracleMembershipConfig,
+    ParachainInfoConfig, PolkadotXcmConfig, SessionConfig, SudoConfig, SystemConfig,
+    TechnicalCommitteeMembershipConfig, VestingConfig, WASM_BINARY,
 };
 use primitives::*;
 use sc_service::ChainType;
 use sc_telemetry::TelemetryEndpoints;
 use sp_consensus_aura::sr25519::AuthorityId as AuraId;
-
-// use hex_literal::hex;
-// use sp_core::crypto::UncheckedInto;
 
 use crate::chain_spec::{
     accumulate, as_properties, get_account_id_from_seed, get_authority_keys_from_seed, Extensions,
@@ -66,8 +49,8 @@ pub fn heiko_dev_config(id: ParaId) -> ChainSpec {
                 get_authority_keys_from_seed("Charlie"),
             ];
             let oracle_accounts = vec![get_account_id_from_seed::<sr25519::Public>("Ferdie")];
-            // let bridge_accounts = vec![get_account_id_from_seed::<sr25519::Public>("Alice")];
-            let validator_feeders = vec![get_account_id_from_seed::<sr25519::Public>("Eve")];
+            let bridge_accounts = vec![get_account_id_from_seed::<sr25519::Public>("Alice")];
+            let liquid_staking_agents = vec![get_account_id_from_seed::<sr25519::Public>("Eve")];
             let initial_allocation: Vec<(AccountId, Balance)> = accumulate(
                 vec![
                     // Faucet accounts
@@ -99,6 +82,7 @@ pub fn heiko_dev_config(id: ParaId) -> ChainSpec {
                     }
                 }),
             );
+            let vesting_list = vec![];
             let council = vec![
                 get_account_id_from_seed::<sr25519::Public>("Alice"),
                 get_account_id_from_seed::<sr25519::Public>("Bob"),
@@ -114,9 +98,10 @@ pub fn heiko_dev_config(id: ParaId) -> ChainSpec {
                 root_key,
                 invulnerables,
                 oracle_accounts,
-                // bridge_accounts,
+                bridge_accounts,
                 initial_allocation,
-                validator_feeders,
+                vesting_list,
+                liquid_staking_agents,
                 council,
                 technical_committee,
                 id,
@@ -128,7 +113,7 @@ pub fn heiko_dev_config(id: ParaId) -> ChainSpec {
         None,
         Some(as_properties(network::NetworkType::Heiko)),
         Extensions {
-            relay_chain: "westend-local".into(),
+            relay_chain: "kusama-local".into(),
             para_id: id.into(),
         },
     )
@@ -136,94 +121,20 @@ pub fn heiko_dev_config(id: ParaId) -> ChainSpec {
 
 pub fn heiko_config(_id: ParaId) -> Result<ChainSpec, String> {
     ChainSpec::from_json_bytes(&include_bytes!("../../../../resources/specs/heiko.json")[..])
-    // Ok(ChainSpec::from_genesis(
-    //     // Name
-    //     "Parallel Heiko",
-    //     // ID
-    //     "heiko",
-    //     ChainType::Live,
-    //     move || {
-    //         let root_key: AccountId = "5CLbxwBcUf8PG4zzf56w27YwwJzkyGv4ULsBNfkCBGEdRGKv"
-    //             .parse()
-    //             .unwrap();
-    //         let invulnerables: Vec<(AccountId, AuraId)> = vec![
-    //             (
-    //                 // 5DfKxDtYyHkWnXkoc8Ek9KaPZE3FBD5kDByDziiRtHsd8D1x
-    //                 // hJGnmqMhfJ5fGh2wXQur7KhxFGjgiURsvmyKDNNCSBm8wavLW
-    //                 hex!["46a4161c87a0c6d58dec1e01b8c360123e1373ffafcf100efd1a9999fbacf161"].into(),
-    //                 hex!["46a4161c87a0c6d58dec1e01b8c360123e1373ffafcf100efd1a9999fbacf161"]
-    //                     .unchecked_into(),
-    //             ),
-    //             (
-    //                 // 5EUmwapW8qScFGh4KGug1xb5Dnm4FYQtzrjTcvjynyRAMRR3
-    //                 // hJHcDpidcTdMN9msn84X3CLxvwJQXYmD5Ze5SzaDz6SgUozT3
-    //                 hex!["6ad41b69e5ff9ec7fa541b9e61f56bc9dd5761e8ab69cf82a3c0722ba227dc5e"].into(),
-    //                 hex!["6ad41b69e5ff9ec7fa541b9e61f56bc9dd5761e8ab69cf82a3c0722ba227dc5e"]
-    //                     .unchecked_into(),
-    //             ),
-    //             (
-    //                 // 5DJd3duMMEeEo9Gi5az1esvuNRB31V8Fds91VkBMrZUCFyUn
-    //                 // hJGS4vmiTg2YzheTRtNbNqGJm5vpWJhvSCeUzsPfNA2jWiUQM
-    //                 hex!["36d97965e462e9ca63079c1102db04f4293e59bca83713703a9a772d0017894d"].into(),
-    //                 hex!["36d97965e462e9ca63079c1102db04f4293e59bca83713703a9a772d0017894d"]
-    //                     .unchecked_into(),
-    //             ),
-    //         ];
-    //         let oracle_accounts = vec![];
-    //         let validator_feeders = vec![];
-    //         let initial_allocation: Vec<(AccountId, Balance)> = serde_json::from_str(include_str!(
-    //             "../../../../resources/heiko-allocation-HKO.json"
-    //         ))
-    //         .unwrap();
-    //         let initial_allocation: Vec<(AccountId, Balance)> = accumulate(initial_allocation);
-    //         let council = vec![];
-    //         let technical_committee = vec![];
-    //
-    //         heiko_genesis(
-    //             root_key,
-    //             invulnerables,
-    //             oracle_accounts,
-    //             initial_allocation,
-    //             validator_feeders,
-    //             council,
-    //             technical_committee,
-    //             id,
-    //         )
-    //     },
-    //     vec![
-    //          "/dns/heiko-bootnode-0.parallel.fi/tcp/30333/p2p/12D3KooWLUTzbrJJDowUKMPfEZrDY6eH8HXvm8hrG6YrdUmdrKPz".parse().unwrap(),
-    //          "/dns/heiko-bootnode-1.parallel.fi/tcp/30333/p2p/12D3KooWEckTASdnkQC8MfBNnzKGfQJmdmzCBWrwra26nTqY4Hmu".parse().unwrap(),
-    //          "/dns/heiko-bootnode-2.parallel.fi/tcp/30333/p2p/12D3KooWFJe4LfS15nTBUduq3cMKmHEWwKYrJFmMnAa7wT5W1eZE".parse().unwrap(),
-    //          "/dns/heiko-bootnode-3.parallel.fi/tcp/30333/p2p/12D3KooWA8jSwEbscptbwv1KqY7d7n2qURbd6zUaaPvzTVBMMgSd".parse().unwrap(),
-    //          "/dns/heiko-bootnode-4.parallel.fi/tcp/30333/p2p/12D3KooWPmc7C5qkcxLzw5qWuxHM4SQs16w9Ecdy6b6zpPzpuPhX".parse().unwrap(),
-    //          "/dns/heiko-bootnode-5.parallel.fi/tcp/30333/p2p/12D3KooWBPS34UM3bbv82hfL3LJq7eioRjFSJp6JArGnEj4ZhukN".parse().unwrap(),
-    //          "/dns/heiko-bootnode-6.parallel.fi/tcp/30333/p2p/12D3KooWNQD9ejZBon81yJuLeV6PWekVqVPX6B72UPepQzWTh8mX".parse().unwrap(),
-    //          "/dns/heiko-bootnode-7.parallel.fi/tcp/30333/p2p/12D3KooWL63x8ZPkY2ZekUqyvyNwsakwbuy8Rq3Dt9tJcxw5NFTt".parse().unwrap()
-    //     ],
-    //     TelemetryEndpoints::new(vec![(TELEMETRY_URL.into(), 0)]).ok(),
-    //     Some("heiko"),
-    //     None,
-    //     Some(as_properties(network::NetworkType::Heiko)),
-    //     Extensions {
-    //         relay_chain: "kusama".into(),
-    //         para_id: id.into(),
-    //     },
-    // ))
 }
 
 fn heiko_genesis(
     root_key: AccountId,
     invulnerables: Vec<(AccountId, AuraId)>,
     oracle_accounts: Vec<AccountId>,
-    // bridge_accounts: Vec<AccountId>,
+    bridge_accounts: Vec<AccountId>,
     initial_allocation: Vec<(AccountId, Balance)>,
-    validator_feeders: Vec<AccountId>,
+    vesting_list: Vec<(AccountId, BlockNumber, BlockNumber, u32, Balance)>,
+    liquid_staking_agents: Vec<AccountId>,
     council: Vec<AccountId>,
     technical_committee: Vec<AccountId>,
     id: ParaId,
 ) -> GenesisConfig {
-    let vesting_list: Vec<(AccountId, BlockNumber, BlockNumber, u32, Balance)> =
-        serde_json::from_str(include_str!("../../../../resources/heiko-vesting-HKO.json")).unwrap();
     GenesisConfig {
         system: SystemConfig {
             code: WASM_BINARY
@@ -278,12 +189,12 @@ fn heiko_genesis(
             members: oracle_accounts,
             phantom: Default::default(),
         },
-        // bridge_membership: BridgeMembershipConfig {
-        //     members: bridge_accounts,
-        //     phantom: Default::default(),
-        // },
-        validator_feeders_membership: ValidatorFeedersMembershipConfig {
-            members: validator_feeders,
+        bridge_membership: BridgeMembershipConfig {
+            members: bridge_accounts,
+            phantom: Default::default(),
+        },
+        liquid_staking_agents_membership: LiquidStakingAgentsMembershipConfig {
+            members: liquid_staking_agents,
             phantom: Default::default(),
         },
         vesting: VestingConfig {

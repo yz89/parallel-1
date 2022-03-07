@@ -28,8 +28,9 @@ use frame_support::{
     match_type,
     traits::{
         fungibles::{InspectMetadata, Mutate},
-        Contains, EnsureOneOf, EqualPrivilegeOnly, Everything, InstanceFilter, Nothing,
-        OnRuntimeUpgrade,
+        tokens::BalanceConversion,
+        ChangeMembers, Contains, EnsureOneOf, EqualPrivilegeOnly, Everything, InstanceFilter,
+        Nothing,
     },
     PalletId,
 };
@@ -67,7 +68,7 @@ use polkadot_parachain::primitives::Sibling;
 use primitives::{
     currency::MultiCurrencyAdapter,
     network::HEIKO_PREFIX,
-    tokens::{HKO, KSM, XKSM},
+    tokens::{EUSDC, EUSDT, HKO, KAR, KSM, KUSD, LKSM, XKSM},
     Index, *,
 };
 use scale_info::TypeInfo;
@@ -85,7 +86,7 @@ pub mod constants;
 pub mod impls;
 // A few exports that help ease life for downstream crates.
 // re-exports
-pub use constants::{currency, fee, time};
+pub use constants::{currency, fee, paras, time};
 pub use impls::DealWithFees;
 
 pub use pallet_liquid_staking;
@@ -141,10 +142,10 @@ pub const VERSION: RuntimeVersion = RuntimeVersion {
     spec_name: create_runtime_str!("heiko"),
     impl_name: create_runtime_str!("heiko"),
     authoring_version: 1,
-    spec_version: 177,
-    impl_version: 22,
+    spec_version: 178,
+    impl_version: 23,
     apis: RUNTIME_API_VERSIONS,
-    transaction_version: 6,
+    transaction_version: 7,
     state_version: 0,
 };
 
@@ -208,7 +209,7 @@ impl Contains<Call> for BaseCallFilter {
     fn contains(call: &Call) -> bool {
         matches!(
             call,
-            // System
+            // System, Currencies
             Call::System(_) |
             Call::Timestamp(_) |
             Call::Balances(_) |
@@ -266,7 +267,7 @@ impl Contains<Call> for BaseCallFilter {
         // Call::NomineeElection(_) |
 
         // // Membership
-        // Call::ValidatorFeedersMembership(_)
+        // Call::LiquidStakingAgentsMembership(_)
     }
 }
 
@@ -361,6 +362,27 @@ impl Convert<CurrencyId, Option<MultiLocation>> for CurrencyIdConvert {
                     GeneralKey(b"HKO".to_vec()),
                 ),
             )),
+            KAR => Some(MultiLocation::new(
+                1,
+                X2(
+                    Parachain(paras::karura::ID),
+                    GeneralKey(paras::karura::KAR_KEY.to_vec()),
+                ),
+            )),
+            KUSD => Some(MultiLocation::new(
+                1,
+                X2(
+                    Parachain(paras::karura::ID),
+                    GeneralKey(paras::karura::KUSD_KEY.to_vec()),
+                ),
+            )),
+            LKSM => Some(MultiLocation::new(
+                1,
+                X2(
+                    Parachain(paras::karura::ID),
+                    GeneralKey(paras::karura::LKSM_KEY.to_vec()),
+                ),
+            )),
             _ => None,
         }
     }
@@ -380,11 +402,31 @@ impl Convert<MultiLocation, Option<CurrencyId>> for CurrencyIdConvert {
                 Some(XKSM)
             }
             MultiLocation {
+                parents: 0,
+                interior: X1(GeneralKey(key)),
+            } if key == b"xKSM".to_vec() => Some(XKSM),
+            MultiLocation {
                 parents: 1,
                 interior: X2(Parachain(id), GeneralKey(key)),
             } if ParaId::from(id) == ParachainInfo::parachain_id() && key == b"HKO".to_vec() => {
                 Some(HKO)
             }
+            MultiLocation {
+                parents: 0,
+                interior: X1(GeneralKey(key)),
+            } if key == b"HKO".to_vec() => Some(HKO),
+            MultiLocation {
+                parents: 1,
+                interior: X2(Parachain(id), GeneralKey(key)),
+            } if id == paras::karura::ID && key == paras::karura::KUSD_KEY.to_vec() => Some(KUSD),
+            MultiLocation {
+                parents: 1,
+                interior: X2(Parachain(id), GeneralKey(key)),
+            } if id == paras::karura::ID && key == paras::karura::KAR_KEY.to_vec() => Some(KAR),
+            MultiLocation {
+                parents: 1,
+                interior: X2(Parachain(id), GeneralKey(key)),
+            } if id == paras::karura::ID && key == paras::karura::LKSM_KEY.to_vec() => Some(LKSM),
             _ => None,
         }
     }
@@ -480,11 +522,13 @@ parameter_types! {
     pub const DerivativeIndex: u16 = 0;
     pub const EraLength: BlockNumber = 6 * 1 * 3600 / 6; // 6HOURS
     pub const MinStake: Balance = 100_000_000_000; // 0.1KSM
-    pub const MinUnstake: Balance = 50_000_000_000; // 0.05KSM
+    pub const MinUnstake: Balance = 50_000_000_000; // 0.05xKSM
     pub const StakingCurrency: CurrencyId = KSM;
     pub const LiquidCurrency: CurrencyId = XKSM;
     pub const XcmFees: Balance = 5_000_000_000; // 0.005KSM
-    pub const BondingDuration: u32 = 28; // 7Days
+    pub const BondingDuration: EraIndex = 28; // 7Days
+    pub const NumSlashingSpans: u32 = 0;
+    pub static DerivativeIndexList: Vec<u16> = vec![0];
 }
 
 impl pallet_liquid_staking::Config for Runtime {
@@ -498,6 +542,7 @@ impl pallet_liquid_staking::Config for Runtime {
     type RelayOrigin = EnsureRootOrMoreThanHalfGeneralCouncil;
     type UpdateOrigin = EnsureRootOrMoreThanHalfGeneralCouncil;
     type DerivativeIndex = DerivativeIndex;
+    type DerivativeIndexList = DerivativeIndexList;
     type XcmFees = XcmFees;
     type StakingCurrency = StakingCurrency;
     type LiquidCurrency = LiquidCurrency;
@@ -507,15 +552,17 @@ impl pallet_liquid_staking::Config for Runtime {
     type XCM = XcmHelper;
     type BondingDuration = BondingDuration;
     type RelayChainBlockNumberProvider = RelayChainBlockNumberProvider<Runtime>;
+    type Members = LiquidStakingAgentsMembership;
+    type NumSlashingSpans = NumSlashingSpans;
 }
 
 parameter_types! {
     pub const MaxValidators: u32 = 16;
-    pub const ValidatorFeedersMembershipMaxMembers: u32 = 3;
+    pub const LiquidStakingAgentsMembershipMaxMembers: u32 = 3;
 }
 
-type ValidatorFeedersMembershipInstance = pallet_membership::Instance5;
-impl pallet_membership::Config<ValidatorFeedersMembershipInstance> for Runtime {
+type LiquidStakingAgentsMembershipInstance = pallet_membership::Instance5;
+impl pallet_membership::Config<LiquidStakingAgentsMembershipInstance> for Runtime {
     type Event = Event;
     type AddOrigin = EnsureRootOrMoreThanHalfGeneralCouncil;
     type RemoveOrigin = EnsureRootOrMoreThanHalfGeneralCouncil;
@@ -524,7 +571,7 @@ impl pallet_membership::Config<ValidatorFeedersMembershipInstance> for Runtime {
     type PrimeOrigin = EnsureRootOrMoreThanHalfGeneralCouncil;
     type MembershipInitialized = ();
     type MembershipChanged = ();
-    type MaxMembers = ValidatorFeedersMembershipMaxMembers;
+    type MaxMembers = LiquidStakingAgentsMembershipMaxMembers;
     type WeightInfo = weights::pallet_membership::WeightInfo<Runtime>;
 }
 
@@ -532,7 +579,7 @@ impl pallet_nominee_election::Config for Runtime {
     type Event = Event;
     type MaxValidators = MaxValidators;
     type WeightInfo = pallet_nominee_election::weights::SubstrateWeight<Runtime>;
-    type Members = ValidatorFeedersMembership;
+    type Members = LiquidStakingAgentsMembership;
 }
 
 // parameter_types! {
@@ -883,19 +930,20 @@ parameter_types! {
 }
 
 pub struct GiftConvert;
-impl Convert<Balance, Balance> for GiftConvert {
-    fn convert(amount: Balance) -> Balance {
-        let decimal = <Assets as InspectMetadata<AccountId>>::decimals(&KSM);
+impl BalanceConversion<Balance, CurrencyId, Balance> for GiftConvert {
+    type Error = DispatchError;
+    fn to_asset_balance(balance: Balance, asset_id: CurrencyId) -> Result<Balance, Self::Error> {
+        let decimal = <Assets as InspectMetadata<AccountId>>::decimals(&asset_id);
         if decimal.is_zero() {
-            return Zero::zero();
+            return Ok(Zero::zero());
         }
 
-        // 0.1KSM
-        if amount >= 10_u128.pow((decimal - 1).into()) {
-            return DOLLARS / 40; // 0.025HKO
-        }
-
-        Zero::zero()
+        let default_gift_amount = DOLLARS / 40; // 0.025HKO
+        Ok(match asset_id {
+            NATIVE_ASSET_ID if balance >= 10_u128.pow((decimal - 1).into()) => default_gift_amount,
+            EUSDT | EUSDC if balance >= 300 * 10_u128.pow(decimal.into()) => default_gift_amount,
+            _ => Zero::zero(),
+        })
     }
 }
 
@@ -912,6 +960,7 @@ pub type LocalAssetTransactor = MultiCurrencyAdapter<
     LocationToAccountId,
     CurrencyIdConvert,
     NativeCurrencyId,
+    ExistentialDeposit,
     GiftAccount,
     GiftConvert,
 >;
@@ -942,6 +991,55 @@ pub type XcmOriginToTransactDispatchOrigin = (
 
 parameter_types! {
     pub KsmPerSecond: (AssetId, u128) = (AssetId::Concrete(MultiLocation::parent()), ksm_per_second());
+    pub XKSMPerSecond: (AssetId, u128) = (
+        MultiLocation::new(
+            1,
+            X2(Parachain(ParachainInfo::parachain_id().into()), GeneralKey(b"xKSM".to_vec())),
+        ).into(),
+        ksm_per_second()
+    );
+    pub XKSMPerSecondOfCanonicalLocation: (AssetId, u128) = (
+        MultiLocation::new(
+            0,
+            X1(GeneralKey(b"xKSM".to_vec())),
+        ).into(),
+        ksm_per_second()
+    );
+    pub HkoPerSecond: (AssetId, u128) = (
+        MultiLocation::new(
+            1,
+            X2(Parachain(ParachainInfo::parachain_id().into()), GeneralKey(b"HKO".to_vec())),
+        ).into(),
+        ksm_per_second() * 30
+    );
+    pub HkoPerSecondOfCanonicalLocation: (AssetId, u128) = (
+        MultiLocation::new(
+            0,
+            X1(GeneralKey(b"HKO".to_vec())),
+        ).into(),
+        ksm_per_second() * 30
+    );
+    pub KusdPerSecond: (AssetId, u128) = (
+        MultiLocation::new(
+            1,
+            X2(Parachain(paras::karura::ID), GeneralKey(paras::karura::KUSD_KEY.to_vec())),
+        ).into(),
+        ksm_per_second() * 400
+    );
+    pub KarPerSecond: (AssetId, u128) = (
+        MultiLocation::new(
+            1,
+            X2(Parachain(paras::karura::ID), GeneralKey(paras::karura::KAR_KEY.to_vec())),
+        ).into(),
+        ksm_per_second() * 50
+    );
+    pub LKSMPerSecond: (AssetId, u128) = (
+        MultiLocation::new(
+            1,
+            X2(Parachain(paras::karura::ID), GeneralKey(paras::karura::LKSM_KEY.to_vec())),
+        ).into(),
+        ksm_per_second()
+    );
 }
 
 match_type! {
@@ -973,6 +1071,17 @@ impl TakeRevenue for ToTreasury {
     }
 }
 
+pub type Trader = (
+    FixedRateOfFungible<KsmPerSecond, ToTreasury>,
+    FixedRateOfFungible<XKSMPerSecond, ToTreasury>,
+    FixedRateOfFungible<XKSMPerSecondOfCanonicalLocation, ToTreasury>,
+    FixedRateOfFungible<HkoPerSecond, ToTreasury>,
+    FixedRateOfFungible<HkoPerSecondOfCanonicalLocation, ToTreasury>,
+    FixedRateOfFungible<KusdPerSecond, ToTreasury>,
+    FixedRateOfFungible<KarPerSecond, ToTreasury>,
+    FixedRateOfFungible<LKSMPerSecond, ToTreasury>,
+);
+
 pub struct XcmConfig;
 impl Config for XcmConfig {
     type Call = Call;
@@ -986,7 +1095,7 @@ impl Config for XcmConfig {
     type LocationInverter = LocationInverter<Ancestry>;
     type Barrier = Barrier;
     type Weigher = FixedWeightBounds<BaseXcmWeight, Call, MaxInstructions>;
-    type Trader = FixedRateOfFungible<KsmPerSecond, ToTreasury>;
+    type Trader = Trader;
     type ResponseHandler = PolkadotXcm;
     type SubscriptionService = PolkadotXcm;
     type AssetTrap = PolkadotXcm;
@@ -1270,7 +1379,7 @@ impl pallet_scheduler::Config for Runtime {
     type PalletsOrigin = OriginCaller;
     type Call = Call;
     type MaximumWeight = MaximumSchedulerWeight;
-    type ScheduleOrigin = EnsureRoot<AccountId>;
+    type ScheduleOrigin = EnsureRootOrMoreThanHalfGeneralCouncil;
     type MaxScheduledPerBlock = MaxScheduledPerBlock;
     type OriginPrivilegeCmp = EqualPrivilegeOnly;
     type WeightInfo = pallet_scheduler::weights::SubstrateWeight<Runtime>;
@@ -1324,40 +1433,67 @@ impl pallet_membership::Config<OracleMembershipInstance> for Runtime {
     type WeightInfo = weights::pallet_membership::WeightInfo<Runtime>;
 }
 
-// parameter_types! {
-//     pub const BridgeMaxMembers: u32 = 100;
-// }
-//
-// type BridgeMembershipInstance = pallet_membership::Instance6;
-// impl pallet_membership::Config<BridgeMembershipInstance> for Runtime {
-//     type Event = Event;
-//     type AddOrigin = EnsureRootOrMoreThanHalfGeneralCouncil;
-//     type RemoveOrigin = EnsureRootOrMoreThanHalfGeneralCouncil;
-//     type SwapOrigin = EnsureRootOrMoreThanHalfGeneralCouncil;
-//     type ResetOrigin = EnsureRootOrMoreThanHalfGeneralCouncil;
-//     type PrimeOrigin = EnsureRootOrMoreThanHalfGeneralCouncil;
-//     type MembershipInitialized = ();
-//     type MembershipChanged = ();
-//     type MaxMembers = BridgeMaxMembers;
-//     type WeightInfo = weights::pallet_membership::WeightInfo<Runtime>;
-// }
-//
-// parameter_types! {
-//     pub const ParallelHeiko: ChainId = 0;
-//     pub const BridgePalletId: PalletId = PalletId(*b"par/brid");
-//     pub const ProposalLifetime: BlockNumber = 200;
-// }
-//
-// impl pallet_bridge::Config for Runtime {
-//     type Event = Event;
-//     type AdminMembers = BridgeMembership;
-//     type RootOperatorOrigin = EnsureRootOrMoreThanHalfGeneralCouncil;
-//     type ChainId = ParallelHeiko;
-//     type PalletId = BridgePalletId;
-//     type Assets = CurrencyAdapter;
-//     type ProposalLifetime = ProposalLifetime;
-//     type WeightInfo = pallet_bridge::weights::SubstrateWeight<Runtime>;
-// }
+parameter_types! {
+    pub const BridgeMaxMembers: u32 = 100;
+}
+
+pub struct ChangeBridgeMembers;
+impl ChangeMembers<AccountId> for ChangeBridgeMembers {
+    fn change_members_sorted(_incoming: &[AccountId], _outgoing: &[AccountId], new: &[AccountId]) {
+        if let Err(e) = Bridge::change_vote_threshold() {
+            log::error!(
+                target: "bridge::change_members_sorted",
+                "Failed to set vote threshold: {:?}",
+                e,
+            );
+        } else {
+            log::info!(
+                target: "bridge::change_members_sorted",
+                "Succeeded to set vote threshold, total members: {:?}",
+                new.len(),
+            );
+        };
+    }
+}
+
+type BridgeMembershipInstance = pallet_membership::Instance6;
+impl pallet_membership::Config<BridgeMembershipInstance> for Runtime {
+    type Event = Event;
+    type AddOrigin = EnsureRootOrMoreThanHalfGeneralCouncil;
+    type RemoveOrigin = EnsureRootOrMoreThanHalfGeneralCouncil;
+    type SwapOrigin = EnsureRootOrMoreThanHalfGeneralCouncil;
+    type ResetOrigin = EnsureRootOrMoreThanHalfGeneralCouncil;
+    type PrimeOrigin = EnsureRootOrMoreThanHalfGeneralCouncil;
+    type MembershipInitialized = ();
+    type MembershipChanged = ChangeBridgeMembers;
+    type MaxMembers = BridgeMaxMembers;
+    type WeightInfo = weights::pallet_membership::WeightInfo<Runtime>;
+}
+
+parameter_types! {
+    pub const ParallelHeiko: ChainId = 0;
+    pub const BridgePalletId: PalletId = PalletId(*b"par/brid");
+    // Set a short lifetime for development
+    pub const ProposalLifetime: BlockNumber = 200;
+    pub const ThresholdPercentage: u32 = 50;
+}
+
+impl pallet_bridge::Config for Runtime {
+    type Event = Event;
+    type AdminMembers = BridgeMembership;
+    type RootOperatorAccountId = OneAccount;
+    type OperateOrigin = EnsureRootOrMoreThanHalfGeneralCouncil;
+    type ChainId = ParallelHeiko;
+    type PalletId = BridgePalletId;
+    type Assets = CurrencyAdapter;
+    type GiftAccount = GiftAccount;
+    type GiftConvert = GiftConvert;
+    type NativeCurrencyId = NativeCurrencyId;
+    type ExistentialDeposit = ExistentialDeposit;
+    type ProposalLifetime = ProposalLifetime;
+    type ThresholdPercentage = ThresholdPercentage;
+    type WeightInfo = pallet_bridge::weights::SubstrateWeight<Runtime>;
+}
 
 parameter_types! {
     pub MinVestedTransfer: Balance = 0;
@@ -1485,17 +1621,20 @@ impl pallet_currency_adapter::Config for Runtime {
 }
 
 parameter_types! {
-    pub const LMPalletId: PalletId = PalletId(*b"par/lqmp");
-    pub const MaxRewardTokens: u32 = 1000;
+    pub const FarmingPalletId: PalletId = PalletId(*b"par/farm");
+    pub const MaxUserLockItemsCount: u32 = 100;
+    pub const LockPoolMaxDuration: u32 = 50400;
 }
 
 impl pallet_farming::Config for Runtime {
     type Event = Event;
     type Assets = CurrencyAdapter;
-    type PalletId = LMPalletId;
-    type MaxRewardTokens = MaxRewardTokens;
-    type CreateOrigin = EnsureRootOrMoreThanHalfGeneralCouncil;
+    type PalletId = FarmingPalletId;
+    type UpdateOrigin = EnsureRootOrMoreThanHalfGeneralCouncil;
     type WeightInfo = pallet_farming::weights::SubstrateWeight<Runtime>;
+    type MaxUserLockItemsCount = MaxUserLockItemsCount;
+    type LockPoolMaxDuration = LockPoolMaxDuration;
+    type Decimal = Decimal;
 }
 
 pub struct WhiteListFilter;
@@ -1516,6 +1655,7 @@ impl Contains<Call> for WhiteListFilter {
             Call::TechnicalCommittee(_) |
             Call::Treasury(_) |
             Call::Scheduler(_) |
+            Call::Preimage(_) |
             // Parachain
             Call::ParachainSystem(_) |
             Call::XcmpQueue(_) |
@@ -1539,8 +1679,6 @@ impl Contains<Call> for WhiteListFilter {
             // Loans
             Call::Loans(_) |
             Call::Prices(_) |
-            // Crowdloans
-            // Call::Crowdloans(_) |
             // Membership
             Call::OracleMembership(_) |
             Call::GeneralCouncilMembership(_) |
@@ -1617,8 +1755,8 @@ construct_runtime!(
         GeneralCouncilMembership: pallet_membership::<Instance1>::{Pallet, Call, Storage, Event<T>, Config<T>} = 70,
         TechnicalCommitteeMembership: pallet_membership::<Instance2>::{Pallet, Call, Storage, Event<T>, Config<T>} = 71,
         OracleMembership: pallet_membership::<Instance3>::{Pallet, Call, Storage, Event<T>, Config<T>} = 72,
-        ValidatorFeedersMembership: pallet_membership::<Instance5>::{Pallet, Call, Storage, Event<T>, Config<T>} = 73,
-        // BridgeMembership: pallet_membership::<Instance6>::{Pallet, Call, Storage, Event<T>, Config<T>} = 74,
+        LiquidStakingAgentsMembership: pallet_membership::<Instance5>::{Pallet, Call, Storage, Event<T>, Config<T>} = 73,
+        BridgeMembership: pallet_membership::<Instance6>::{Pallet, Call, Storage, Event<T>, Config<T>} = 74,
 
         // AMM
         AMM: pallet_amm::{Pallet, Call, Storage, Event<T>} = 80,
@@ -1626,7 +1764,7 @@ construct_runtime!(
         CurrencyAdapter: pallet_currency_adapter::{Pallet, Call} = 82,
 
         // Others
-        // Bridge: pallet_bridge::{Pallet, Call, Storage, Event<T>} = 90,
+        Bridge: pallet_bridge::{Pallet, Call, Storage, Event<T>} = 90,
         EmergencyShutdown: pallet_emergency_shutdown::{Pallet, Call, Storage, Event<T>} = 91,
         Farming: pallet_farming::{Pallet, Call, Storage, Event<T>} = 92,
         XcmHelper: pallet_xcm_helper::{Pallet, Call, Storage, Event<T>} = 93,
@@ -1667,27 +1805,8 @@ pub type Executive = frame_executive::Executive<
     frame_system::ChainContext<Runtime>,
     Runtime,
     AllPalletsWithSystem,
-    SchedulerMigrationV3,
+    (),
 >;
-
-// Migration for scheduler pallet to move from a plain Call to a CallOrHash.
-pub struct SchedulerMigrationV3;
-
-impl OnRuntimeUpgrade for SchedulerMigrationV3 {
-    fn on_runtime_upgrade() -> frame_support::weights::Weight {
-        Scheduler::migrate_v2_to_v3()
-    }
-
-    #[cfg(feature = "try-runtime")]
-    fn pre_upgrade() -> Result<(), &'static str> {
-        Scheduler::pre_migrate_to_v3()
-    }
-
-    #[cfg(feature = "try-runtime")]
-    fn post_upgrade() -> Result<(), &'static str> {
-        Scheduler::post_migrate_to_v3()
-    }
-}
 
 impl_runtime_apis! {
     impl sp_consensus_aura::AuraApi<Block, AuraId> for Runtime {
@@ -1847,7 +1966,7 @@ impl_runtime_apis! {
             list_benchmark!(list, extra, pallet_balances, Balances);
             list_benchmark!(list, extra, pallet_membership, TechnicalCommitteeMembership);
             list_benchmark!(list, extra, pallet_multisig, Multisig);
-            // list_benchmark!(list, extra, pallet_bridge, Bridge);
+            list_benchmark!(list, extra, pallet_bridge, Bridge);
             list_benchmark!(list, extra, pallet_loans, Loans);
             list_benchmark!(list, extra, frame_system, SystemBench::<Runtime>);
             list_benchmark!(list, extra, pallet_timestamp, Timestamp);
@@ -1893,7 +2012,7 @@ impl_runtime_apis! {
             add_benchmark!(params, batches, frame_system, SystemBench::<Runtime>);
             add_benchmark!(params, batches, pallet_balances, Balances);
             add_benchmark!(params, batches, pallet_timestamp, Timestamp);
-            // add_benchmark!(params, batches, pallet_bridge, Bridge);
+            add_benchmark!(params, batches, pallet_bridge, Bridge);
             add_benchmark!(params, batches, pallet_loans, Loans);
             add_benchmark!(params, batches, pallet_multisig, Multisig);
             add_benchmark!(params, batches, pallet_membership, TechnicalCommitteeMembership);
