@@ -18,9 +18,6 @@
 //!
 //! This pallet manages the NPoS operations for relay chain asset.
 
-// TODO: multi-accounts support
-// TODO: fix benchmarks
-// TODO: fix unit tests
 // TODO: enrich unit tests and try to find a way run relaychain block to target block
 
 #![cfg_attr(not(feature = "std"), no_std)]
@@ -184,7 +181,7 @@ pub mod pallet {
         /// The derivative get unstaked successfully
         Unstaked(T::AccountId, BalanceOf<T>, BalanceOf<T>),
         /// Staking ledger feeded
-        StakingLedgerUpdated(StakingLedger<T::AccountId, BalanceOf<T>>),
+        StakingLedgerUpdated(DerivativeIndex, StakingLedger<T::AccountId, BalanceOf<T>>),
         /// Sent staking.bond call to relaychain
         Bonding(
             DerivativeIndex,
@@ -212,10 +209,10 @@ pub mod pallet {
         /// [multi_location, query_id, res]
         NotificationReceived(Box<MultiLocation>, QueryId, Option<(u32, XcmError)>),
         /// Claim user's unbonded staking assets
-        /// [era_index, account_id, amount]
-        ClaimedFor(EraIndex, T::AccountId, BalanceOf<T>),
+        /// [account_id, amount]
+        ClaimedFor(T::AccountId, BalanceOf<T>),
         /// New era
-        /// [bond_amount, rebond_amount, unbond_amount]
+        /// [era_index, bond_amount, rebond_amount, unbond_amount]
         NewEra(EraIndex, BalanceOf<T>, BalanceOf<T>, BalanceOf<T>),
     }
 
@@ -233,6 +230,8 @@ pub mod pallet {
         InvalidStakingCurrency,
         /// Invalid derivative index
         InvalidDerivativeIndex,
+        /// Invalid staking ledger
+        InvalidStakingLedger,
         /// Exceeded liquid currency's market cap
         CapExceeded,
         /// Invalid market cap
@@ -486,7 +485,7 @@ pub mod pallet {
             Ok(().into())
         }
 
-        /// feed staking_ledger for updating exchange rate.
+        /// Update staking_ledger for updating exchange rate in next era
         #[pallet::weight(<T as Config>::WeightInfo::update_staking_ledger())]
         #[transactional]
         pub fn update_staking_ledger(
@@ -498,16 +497,25 @@ pub mod pallet {
 
             Self::do_update_ledger(derivative_index, |ledger| {
                 // TODO: validate staking_ledger using storage proof
+                ensure!(
+                    ledger.unlocking == staking_ledger.unlocking
+                        && ledger.active == staking_ledger.active,
+                    Error::<T>::InvalidStakingLedger
+                );
                 *ledger = staking_ledger.clone();
                 Ok(())
             })?;
 
             log::trace!(
                 target: "liquidStaking::update_staking_ledger",
-                "staking_ledger: {:?}",
+                "index: {:?}, staking_ledger: {:?}",
+                &derivative_index,
                 &staking_ledger,
             );
-            Self::deposit_event(Event::<T>::StakingLedgerUpdated(staking_ledger));
+            Self::deposit_event(Event::<T>::StakingLedgerUpdated(
+                derivative_index,
+                staking_ledger,
+            ));
             Ok(().into())
         }
 
@@ -658,13 +666,13 @@ pub mod pallet {
 
                 log::trace!(
                     target: "liquidStaking::claim_for",
-                    "current era: {:?}, beneficiary: {:?}, amount: {:?}",
+                    "era: {:?}, beneficiary: {:?}, amount: {:?}",
                     &current_era,
                     &who,
                     amount
                 );
 
-                Self::deposit_event(Event::<T>::ClaimedFor(current_era, who.clone(), amount));
+                Self::deposit_event(Event::<T>::ClaimedFor(who.clone(), amount));
                 Ok(())
             })?;
             Ok(().into())
@@ -695,7 +703,7 @@ pub mod pallet {
         fn on_initialize(_block_number: T::BlockNumber) -> u64 {
             with_transaction(|| {
                 // TODO: fix weights
-                if let Ok(_) = Self::do_advance_era(Self::era_advance_offset()) {
+                if Self::do_advance_era(Self::era_advance_offset()).is_ok() {
                     TransactionOutcome::Commit(0)
                 } else {
                     TransactionOutcome::Rollback(0)
@@ -729,7 +737,7 @@ pub mod pallet {
                 .map_err(Into::into)
         }
 
-        /// Derivative parachain account
+        /// Derivative of parachain's account
         pub fn derivative_sovereign_account_id(derivative_index: DerivativeIndex) -> T::AccountId {
             let para_account = Self::sovereign_account_id();
             pallet_utility::Pallet::<T>::derivative_account_id(para_account, derivative_index)
@@ -743,29 +751,21 @@ pub mod pallet {
                 .unwrap_or_else(Zero::zero)
         }
 
-        fn bonding_amount() -> BalanceOf<T> {
-            T::DerivativeIndexList::get()
-                .into_iter()
-                .fold(Zero::zero(), |mut acc, index| {
-                    let ledger = StakingLedgers::<T>::get(&index);
-                    let bonding_amount =
-                        ledger.as_ref().map_or(Zero::zero(), |ledger| ledger.active);
-                    acc = acc.saturating_add(bonding_amount);
-                    acc
-                })
+        #[allow(dead_code)]
+        fn bonded_of(index: DerivativeIndex) -> BalanceOf<T> {
+            StakingLedgers::<T>::get(&index).map_or(Zero::zero(), |ledger| ledger.active)
         }
 
-        fn unbonding_amount() -> BalanceOf<T> {
-            T::DerivativeIndexList::get()
-                .into_iter()
-                .fold(Zero::zero(), |mut acc, index| {
-                    let ledger = StakingLedgers::<T>::get(&index);
-                    let unbonding_amount = ledger.as_ref().map_or(Zero::zero(), |ledger| {
-                        ledger.total.saturating_sub(ledger.active)
-                    });
-                    acc = acc.saturating_add(unbonding_amount);
-                    acc
-                })
+        fn unbonding_of(index: DerivativeIndex) -> BalanceOf<T> {
+            StakingLedgers::<T>::get(&index).map_or(Zero::zero(), |ledger| {
+                ledger.total.saturating_sub(ledger.active)
+            })
+        }
+
+        fn get_total_bonded() -> BalanceOf<T> {
+            StakingLedgers::<T>::iter_values().fold(Zero::zero(), |acc, ledger| {
+                acc.saturating_add(ledger.active)
+            })
         }
 
         #[require_transactional]
@@ -997,6 +997,7 @@ pub mod pallet {
                 derivative_index,
                 num_slashing_spans,
             ));
+
             Ok(())
         }
 
@@ -1037,6 +1038,7 @@ pub mod pallet {
             );
 
             Self::deposit_event(Event::<T>::Nominating(derivative_index, targets));
+
             Ok(())
         }
 
@@ -1134,13 +1136,13 @@ pub mod pallet {
         #[require_transactional]
         fn do_update_exchange_rate() -> DispatchResult {
             let matching_ledger = Self::matching_pool();
-            let bonding_amount = Self::bonding_amount();
+            let total_bonded = Self::get_total_bonded();
             let issuance = T::Assets::total_issuance(Self::liquid_currency()?);
             if issuance.is_zero() {
                 return Ok(());
             }
             let new_exchange_rate = Rate::checked_from_rational(
-                bonding_amount
+                total_bonded
                     .checked_add(matching_ledger.total_stake_amount)
                     .and_then(|r| r.checked_sub(matching_ledger.total_unstake_amount))
                     .ok_or(ArithmeticError::Overflow)?,
@@ -1176,8 +1178,7 @@ pub mod pallet {
             CurrentEra::<T>::mutate(|e| *e = e.saturating_add(offset));
 
             let derivative_index = T::DerivativeIndex::get();
-            let unbonding_amount = Self::unbonding_amount();
-
+            let unbonding_amount = Self::unbonding_of(derivative_index);
             if !unbonding_amount.is_zero() {
                 Self::do_withdraw_unbonded(derivative_index, T::NumSlashingSpans::get())?;
             }
@@ -1197,7 +1198,8 @@ pub mod pallet {
 
             log::trace!(
                 target: "liquidStaking::do_advance_era",
-                "offset: {:?}, bond_amount: {:?}, rebond_amount: {:?}, unbond_amount: {:?}",
+                "index: {:?}, offset: {:?}, bond_amount: {:?}, rebond_amount: {:?}, unbond_amount: {:?}",
+                &derivative_index,
                 &offset,
                 &bond_amount,
                 &rebond_amount,
