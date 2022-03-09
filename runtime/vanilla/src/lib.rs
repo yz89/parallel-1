@@ -935,7 +935,7 @@ impl BalanceConversion<Balance, CurrencyId, Balance> for GiftConvert {
 
         let default_gift_amount = DOLLARS / 40; // 0.025HKO
         Ok(match asset_id {
-            NATIVE_ASSET_ID if balance >= 10_u128.pow((decimal - 1).into()) => default_gift_amount,
+            KSM if balance >= 10_u128.pow((decimal - 1).into()) => default_gift_amount,
             EUSDT | EUSDC if balance >= 300 * 10_u128.pow(decimal.into()) => default_gift_amount,
             _ => Zero::zero(),
         })
@@ -1508,8 +1508,8 @@ impl orml_vesting::Config for Runtime {
 
 parameter_types! {
     pub const AMMPalletId: PalletId = PalletId(*b"par/ammp");
-    pub DefaultLpFee: Ratio = Ratio::from_rational(25u32, 10000u32);        // 0.25%
-    pub DefaultProtocolFee: Ratio = Ratio::from_rational(5u32, 10000u32);   // 0.05%
+    pub DefaultLpFee: Ratio = Ratio::from_rational(30u32, 10000u32);        // 0.30%
+    pub DefaultProtocolFee: Ratio = Ratio::from_rational(0u32, 10000u32);   // 0.00% no fees for launch
     pub DefaultProtocolFeeReceiver: AccountId = TreasuryPalletId::get().into_account();
     pub const MinimumLiquidity: u128 = 1_000u128;
 }
@@ -1531,7 +1531,6 @@ impl pallet_amm::Config for Runtime {
 parameter_types! {
     pub const CrowdloansPalletId: PalletId = PalletId(*b"crwloans");
     pub const MinContribution: Balance = 100_000_000_000;
-    pub const MaxVrfs: u32 = 10;
     pub const MigrateKeysLimit: u32 = 10;
     pub const RemoveKeysLimit: u32 = 1000;
     pub RefundLocation: AccountId = Utility::derivative_account_id(ParachainInfo::parachain_id().into_account(), u16::MAX);
@@ -1560,7 +1559,6 @@ impl pallet_crowdloans::Config for Runtime {
     type Assets = Assets;
     type RelayCurrency = RelayCurrency;
     type MinContribution = MinContribution;
-    type MaxVrfs = MaxVrfs;
     type MigrateKeysLimit = MigrateKeysLimit;
     type RemoveKeysLimit = RemoveKeysLimit;
     type MigrateOrigin = EnsureRootOrMoreThanHalfGeneralCouncil;
@@ -1723,7 +1721,6 @@ construct_runtime!(
         Preimage: pallet_preimage::{Pallet, Call, Storage, Event<T>} = 16,
 
         // Parachain
-        ParachainSystem: cumulus_pallet_parachain_system::{Pallet, Call, Config, Storage, Inherent, Event<T>, ValidateUnsigned} = 20,
         ParachainInfo: parachain_info::{Pallet, Storage, Config} = 21,
         XcmpQueue: cumulus_pallet_xcmp_queue::{Pallet, Call, Storage, Event<T>} = 22,
         DmpQueue: cumulus_pallet_dmp_queue::{Pallet, Call, Storage, Event<T>} = 23,
@@ -1769,6 +1766,9 @@ construct_runtime!(
         EmergencyShutdown: pallet_emergency_shutdown::{Pallet, Call, Storage, Event<T>} = 91,
         Farming: pallet_farming::{Pallet, Call, Storage, Event<T>} = 92,
         XcmHelper: pallet_xcm_helper::{Pallet, Call, Storage, Event<T>} = 93,
+
+        // Parachain System, always put it at the end
+        ParachainSystem: cumulus_pallet_parachain_system::{Pallet, Call, Config, Storage, Inherent, Event<T>, ValidateUnsigned} = 20,
     }
 );
 

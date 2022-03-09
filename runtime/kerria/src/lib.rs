@@ -948,7 +948,7 @@ impl BalanceConversion<Balance, CurrencyId, Balance> for GiftConvert {
 
         let default_gift_amount = 125 * DOLLARS / 100; // 1.25PARA
         Ok(match asset_id {
-            NATIVE_ASSET_ID if balance >= 5 * 10_u128.pow(decimal.into()) => default_gift_amount,
+            DOT if balance >= 5 * 10_u128.pow(decimal.into()) => default_gift_amount,
             EUSDT | EUSDC if balance >= 300 * 10_u128.pow(decimal.into()) => default_gift_amount,
             _ => Zero::zero(),
         })
@@ -1552,7 +1552,6 @@ impl pallet_amm::Config for Runtime {
 parameter_types! {
     pub const CrowdloansPalletId: PalletId = PalletId(*b"crwloans");
     pub const MinContribution: Balance = 50_000_000_000;
-    pub const MaxVrfs: u32 = 10;
     pub const MigrateKeysLimit: u32 = 10;
     pub const RemoveKeysLimit: u32 = 1000;
     pub RefundLocation: AccountId = Utility::derivative_account_id(ParachainInfo::parachain_id().into_account(), u16::MAX);
@@ -1581,7 +1580,6 @@ impl pallet_crowdloans::Config for Runtime {
     type Assets = Assets;
     type RelayCurrency = RelayCurrency;
     type MinContribution = MinContribution;
-    type MaxVrfs = MaxVrfs;
     type MigrateKeysLimit = MigrateKeysLimit;
     type RemoveKeysLimit = RemoveKeysLimit;
     type MigrateOrigin = EnsureRootOrMoreThanHalfGeneralCouncil;
@@ -1745,7 +1743,6 @@ construct_runtime!(
         Preimage: pallet_preimage::{Pallet, Call, Storage, Event<T>} = 16,
 
         // Parachain
-        ParachainSystem: cumulus_pallet_parachain_system::{Pallet, Call, Config, Storage, Inherent, Event<T>, ValidateUnsigned} = 20,
         ParachainInfo: parachain_info::{Pallet, Storage, Config} = 21,
         XcmpQueue: cumulus_pallet_xcmp_queue::{Pallet, Call, Storage, Event<T>} = 22,
         DmpQueue: cumulus_pallet_dmp_queue::{Pallet, Call, Storage, Event<T>} = 23,
@@ -1791,6 +1788,9 @@ construct_runtime!(
         EmergencyShutdown: pallet_emergency_shutdown::{Pallet, Call, Storage, Event<T>} = 91,
         Farming: pallet_farming::{Pallet, Call, Storage, Event<T>} = 92,
         XcmHelper: pallet_xcm_helper::{Pallet, Call, Storage, Event<T>} = 93,
+
+        // Parachain System, always put it at the end
+        ParachainSystem: cumulus_pallet_parachain_system::{Pallet, Call, Config, Storage, Inherent, Event<T>, ValidateUnsigned} = 20,
     }
 );
 

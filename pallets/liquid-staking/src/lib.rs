@@ -409,10 +409,15 @@ pub mod pallet {
                 // TODO: check if we can bond before the next era
                 // so that the one era's delay can be removed
                 let mut chunks = b.take().unwrap_or_default();
-                chunks.push(UnlockChunk {
-                    value: amount,
-                    era: Self::current_era() + T::BondingDuration::get() + 1,
-                });
+                let target_era = Self::current_era() + T::BondingDuration::get() + 1;
+                if let Some(mut chunk) = chunks.last_mut().filter(|chunk| chunk.era == target_era) {
+                    chunk.value = chunk.value.saturating_add(amount);
+                } else {
+                    chunks.push(UnlockChunk {
+                        value: amount,
+                        era: target_era,
+                    });
+                }
                 ensure!(
                     chunks.len() <= MAX_UNLOCKING_CHUNKS,
                     Error::<T>::NoMoreChunks
@@ -685,31 +690,48 @@ pub mod pallet {
         #[transactional]
         pub fn force_set_era_start_block(
             origin: OriginFor<T>,
-            b: BlockNumberFor<T>,
+            block_number: BlockNumberFor<T>,
         ) -> DispatchResult {
             T::UpdateOrigin::ensure_origin(origin)?;
-            EraStartBlock::<T>::put(b);
+            EraStartBlock::<T>::put(block_number);
             Ok(())
         }
 
         #[pallet::weight(10_000)]
         #[transactional]
-        pub fn force_set_current_era(origin: OriginFor<T>, e: EraIndex) -> DispatchResult {
+        pub fn force_set_current_era(origin: OriginFor<T>, era: EraIndex) -> DispatchResult {
             T::UpdateOrigin::ensure_origin(origin)?;
-            CurrentEra::<T>::put(e);
+            CurrentEra::<T>::put(era);
             Ok(())
         }
     }
 
     #[pallet::hooks]
     impl<T: Config> Hooks<T::BlockNumber> for Pallet<T> {
-        fn on_initialize(_block_number: T::BlockNumber) -> u64 {
+        fn on_initialize(block_number: T::BlockNumber) -> frame_support::weights::Weight {
             with_transaction(|| {
                 // TODO: fix weights
-                if Self::do_advance_era(Self::era_advance_offset()).is_ok() {
-                    TransactionOutcome::Commit(0)
-                } else {
-                    TransactionOutcome::Rollback(0)
+                let relaychain_block_number =
+                    T::RelayChainBlockNumberProvider::current_block_number();
+                let offset = Self::offset(relaychain_block_number);
+                log::trace!(
+                    target: "liquidStaking::on_initialize",
+                    "relaychain_block_number: {:?}, block_number: {:?}, advance_offset: {:?}",
+                    &relaychain_block_number,
+                    &block_number,
+                    &offset
+                );
+                match Self::do_advance_era(offset) {
+                    Ok(()) => TransactionOutcome::Commit(0),
+                    Err(err) => {
+                        log::trace!(
+                            target: "liquidStaking::do_advance_era",
+                            "Could not advance era! block_number: {:#?}, err: {:?}",
+                            &block_number,
+                            &err
+                        );
+                        TransactionOutcome::Rollback(0)
+                    }
                 }
             })
         }
@@ -746,8 +768,8 @@ pub mod pallet {
             pallet_utility::Pallet::<T>::derivative_account_id(para_account, derivative_index)
         }
 
-        fn era_advance_offset() -> EraIndex {
-            T::RelayChainBlockNumberProvider::current_block_number()
+        fn offset(relaychain_block_number: BlockNumberFor<T>) -> EraIndex {
+            relaychain_block_number
                 .checked_sub(&Self::era_start_block())
                 .and_then(|r| r.checked_div(&T::EraLength::get()))
                 .and_then(|r| TryInto::<EraIndex>::try_into(r).ok())
@@ -1020,7 +1042,7 @@ pub mod pallet {
 
             log::trace!(
                 target: "liquidStaking::nominate",
-                "index: {:?}, targets: {:?}",
+                "index: {:?}, targets: {:#?}",
                 &derivative_index,
                 &targets,
             );
